@@ -2,6 +2,7 @@
 Main reviewer logic - intercepts card reviews and shows AI interface
 """
 
+
 import requests
 from aqt import mw, gui_hooks
 from aqt.reviewer import Reviewer
