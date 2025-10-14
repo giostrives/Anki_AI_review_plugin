@@ -2,13 +2,12 @@
 Main reviewer logic - intercepts card reviews and shows AI interface
 """
 
+import requests
 from aqt import mw, gui_hooks
 from aqt.reviewer import Reviewer
-from aqt.utils import tooltip, showInfo
+from aqt.utils import showInfo
 from aqt.webview import WebContent
-import json
-import os
-import requests
+
 
 class AIReviewer:
     def __init__(self):
@@ -235,4 +234,5 @@ class AIReviewer:
     def rate_card(self, ease):
         """Rate the card and move to next"""
         if self.current_card:
+            mw.reviewer._showAnswer()
             mw.reviewer._answerCard(ease)
