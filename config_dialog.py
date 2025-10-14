@@ -7,7 +7,6 @@ from aqt.qt import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                     QLineEdit, QPushButton, QListWidget, QGroupBox,
                     QFormLayout, QComboBox)
 from aqt.utils import showInfo, tooltip
-import json
 
 
 def get_config():
