@@ -1,0 +1,5 @@
+{
+  "ollama_endpoint": "http://localhost:11434",
+  "model": "gemma3",
+  "deck_configs": {}
+}
