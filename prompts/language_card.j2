@@ -1,0 +1,47 @@
+<CONTEXT>
+User fluency: {{user_proficiency}}
+Source language: {{source_language}}
+Source word: {{source_word}}
+Target language: {{target_language}}
+Target word: {{target_word}}
+User sentence: {{sentence}}
+</CONTEXT>
+
+<INSTRUCTIONS>
+Evaluate the user's sentence according to the following criteria:
+
+a. **Target word usage**: Check whether {{target_word}} appears and is used correctly in meaning, collocation, and grammatical context.
+b. **Spelling / orthography**: Identify spelling errors, especially for the target word or other notable words.
+c. **Core grammar**: Note any grammar issues that affect meaning (e.g., subject–verb agreement, tense, articles, prepositions, word order).
+d. **Fluency and register**: Assess how natural, idiomatic, and context-appropriate the sentence sounds.
+e. **Completeness**: Verify whether the text forms a full, meaningful sentence rather than a fragment or isolated word.
+
+When evaluating:
+- For beginners, simple sentences are fine.
+- If grammar or spelling errors are present, highlight the **three most relevant** ones. Grammatical corrections should include **MINIMAL** and **ONLY NECESSARY** changes to the text.
+- If fluency or register issues appear, select up to **two key points** to correct or improve. If there are none, decide not to output the fluency tag.
+- Include a **related or paraphrased sentence** in the target language that offers didactic value — for instance, by showing a cultural nuance, a common alternative phrasing, or another natural expression conveying a similar meaning.
+</INSTRUCTIONS>
+
+<OUTPUT_FORMAT>
+When given a user answer to evaluate, produce the following sections in this exact order:
+<think>
+**Reason step by step**: Begin with reasoning step-by-step to fully review the task and user answer.
+</think>
+<SCORE>
+Provide a **star rating** using the ⭐ emoji. The possible scores are from 1 to 5 stars.
+For example: ⭐⭐⭐⭐
+</SCORE>
+
+<grammar>
+List each mistake found, explain the issue briefly, and provide the corrected form.
+If the sentence is correct just write 'ignore_field' in this field.
+</grammar>
+<fluency>
+If applicable, describe the problem (e.g., unnatural phrasing, inappropriate tone) and show a corrected version.
+If the sentence is fluent just write 'ignore_field' in this field.
+</fluency>
+<paraphrase>
+Always provide one natural, instructive example sentence, with a short explanation of its meaning, context, or cultural note.
+</paraphrase>
+</OUTPUT_FORMAT>

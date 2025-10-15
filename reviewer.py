@@ -1,13 +1,15 @@
 """
 Main reviewer logic - intercepts card reviews and shows AI interface
 """
-
+import re
 
 import requests
 from aqt import mw, gui_hooks
 from aqt.reviewer import Reviewer
 from aqt.utils import showInfo
 from aqt.webview import WebContent
+
+from prompts import language_card_prompt
 
 
 class AIReviewer:
@@ -163,21 +165,14 @@ class AIReviewer:
         card_data = self.get_card_data()
         config = mw.addonManager.getConfig(__name__)
 
-        prompt = f"""Evaluate if the student knows the word "{card_data['front']}" ({card_data['source_language']}) based on their sentence in {card_data['target_language']}: "{answer}"
-
-The word should translate to: "{card_data['back']}"
-
-Check:
-1. Did they use the word correctly?
-2. Did they write a sentence or just the translation
-3. Is the grammar acceptable (minor mistakes OK)?
-4. Is the usage contextually appropriate? 
-
-Respond with:
-- PASS or FAIL on the first two lines
-- Then provide brief, encouraging feedback (2-3 sentences)
-
-Be lenient - if they clearly know the word despite minor grammar mistakes, mark as PASS."""
+        prompt = language_card_prompt.render(
+            user_proficiency='beginner',
+            source_language=card_data['source_language'],
+            target_language=card_data['target_language'],
+            source_word=card_data['front'],
+            target_word=card_data['back'],
+            sentence=answer
+        )
 
         try:
             response = requests.post(
@@ -193,22 +188,26 @@ Be lenient - if they clearly know the word despite minor grammar mistakes, mark 
             data = response.json()
             ai_feedback = data['response']
 
+            # Parse XML tags from the response
+            feedback_html = self.parse_feedback_to_html(ai_feedback)
+
             # Transform UI: hide textarea and button, show compact answer and feedback
             answer_escaped = answer.replace('`', '\\`').replace('$', '\\$').replace("'", "\\'")
-            feedback_escaped = ai_feedback.replace('`', '\\`').replace('$', '\\$').replace('\n', '\\n').replace("'", "\\'")
+            feedback_escaped = feedback_html.replace('`', '\\`').replace('$', '\\$').replace('\n', '\\n').replace("'",
+                                                                                                                  "\\'")
 
             js = f"""
             // Hide the textarea and submit button
             document.getElementById('inputContainer').style.display = 'none';
             document.getElementById('submitContainer').style.display = 'none';
-            
+
             // Show the compact "Your answer"
             document.getElementById('yourAnswerDisplay').style.display = 'block';
             document.getElementById('yourAnswerText').textContent = '{answer_escaped}';
-            
+
             // Show the feedback
             document.getElementById('feedback').style.display = 'block';
-            document.getElementById('feedbackText').textContent = '{feedback_escaped}';
+            document.getElementById('feedbackText').innerHTML = '{feedback_escaped}';
             """
             mw.reviewer.web.eval(js)
 
@@ -217,3 +216,47 @@ Be lenient - if they clearly know the word despite minor grammar mistakes, mark 
 
         except Exception as e:
             showInfo(f"Error connecting to Ollama: {e}\\n\\nMake sure Ollama is running with: ollama serve")
+
+    def parse_feedback_to_html(self, feedback):
+        """Parse XML-tagged feedback into formatted HTML"""
+        html_parts = []
+
+        # Extract each section using regex
+        def extract_tag_content(tag_name, content):
+            """Extract content from XML tags, return None if tag is missing or contains only 'None'"""
+            pattern = f'<{tag_name}>(.*?)</{tag_name}>'
+            match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+            if match:
+                extracted = match.group(1).strip()
+                # Check if content contains the "ignore_field"
+                if 'ignore_field' in extracted.lower():
+                    return None
+                return extracted
+            return None
+
+        # Extract score section
+        score = extract_tag_content('score', feedback)
+        if score:
+            html_parts.append(f'<div class="feedback-score"><strong>Score:</strong> {score}</div>')
+
+        # Extract grammar section
+        grammar = extract_tag_content('grammar', feedback)
+        if grammar:
+            html_parts.append(f'<div class="feedback-grammar"><strong>Grammar:</strong><br>{grammar}</div>')
+
+        # Extract fluency section
+        fluency = extract_tag_content('fluency', feedback)
+        if fluency:
+            html_parts.append(f'<div class="feedback-fluency"><strong>Fluency:</strong><br>{fluency}</div>')
+
+        # Extract paraphrase section (always present according to specs)
+        paraphrase = extract_tag_content('paraphrase', feedback)
+        if paraphrase:
+            html_parts.append(f'<div class="feedback-paraphrase"><strong>Example:</strong><br>{paraphrase}</div>')
+
+        # Join all parts with spacing
+        if html_parts:
+            return '<br><br>'.join(html_parts)
+        else:
+            # Fallback if no tags were found
+            return feedback.replace('\n', '<br>')

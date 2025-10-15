@@ -29,7 +29,7 @@ class ConfigDialog(QDialog):
     def setup_ui(self):
         self.setWindowTitle("AI Reviewer Configuration")
         self.setMinimumWidth(600)
-        self.setMinimumHeight(400)
+        self.setMinimumHeight(500)
 
         layout = QVBoxLayout()
 
@@ -62,8 +62,18 @@ class ConfigDialog(QDialog):
         self.enabled_checkbox = QComboBox()
         self.enabled_checkbox.addItems(["Disabled", "Enabled"])
 
+        # User level dropdown
+        self.user_level = QComboBox()
+        self.user_level.addItems(["Beginner", "Intermediate", "Advanced"])
+
+        # Task type dropdown
+        self.task_type = QComboBox()
+        self.task_type.addItems(["Language", "Concept", "Mathematical Proof"])
+
         lang_layout.addRow("Source Language:", self.source_lang)
         lang_layout.addRow("Target Language:", self.target_lang)
+        lang_layout.addRow("User Level:", self.user_level)
+        lang_layout.addRow("Task Type:", self.task_type)
         lang_layout.addRow("AI Review:", self.enabled_checkbox)
 
         deck_layout.addLayout(lang_layout)
@@ -104,10 +114,24 @@ class ConfigDialog(QDialog):
             self.source_lang.setText(cfg.get("source_language", ""))
             self.target_lang.setText(cfg.get("target_language", ""))
             self.enabled_checkbox.setCurrentIndex(1 if cfg.get("enabled", False) else 0)
+
+            # Load user level
+            level = cfg.get("user_level", "Beginner")
+            level_index = self.user_level.findText(level)
+            if level_index >= 0:
+                self.user_level.setCurrentIndex(level_index)
+
+            # Load task type
+            task = cfg.get("task", "Language")
+            task_index = self.task_type.findText(task)
+            if task_index >= 0:
+                self.task_type.setCurrentIndex(task_index)
         else:
             self.source_lang.setText("")
             self.target_lang.setText("")
             self.enabled_checkbox.setCurrentIndex(0)
+            self.user_level.setCurrentIndex(0)
+            self.task_type.setCurrentIndex(0)
 
     def save_deck_config(self):
         """Save configuration for currently selected deck"""
@@ -128,6 +152,8 @@ class ConfigDialog(QDialog):
         self.config["deck_configs"][deck_name] = {
             "source_language": self.source_lang.text(),
             "target_language": self.target_lang.text(),
+            "user_level": self.user_level.currentText(),
+            "task": self.task_type.currentText(),
             "enabled": self.enabled_checkbox.currentIndex() == 1
         }
 
