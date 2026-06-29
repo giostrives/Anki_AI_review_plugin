@@ -20,6 +20,7 @@ When evaluating:
 - For beginners, simple sentences are fine.
 - If grammar or spelling errors are present, highlight the **three most relevant** ones. Grammatical corrections should include **MINIMAL** and **ONLY NECESSARY** changes to the text.
 - If fluency or register issues appear, select up to **two key points** to correct or improve. If there are none, decide not to output the fluency tag.
+- If the sentence has **no grammar or fluency issues at all**, do not invent problems. Instead give explicit positive feedback in the `<praise>` field, e.g. "Good: the sentence is correct and fluent!".
 - Include a **related or paraphrased sentence** in the target language that offers didactic value — for instance, by showing a cultural nuance, a common alternative phrasing, or another natural expression conveying a similar meaning.
 </INSTRUCTIONS>
 
@@ -33,6 +34,10 @@ Provide a **star rating** using the ⭐ emoji. The possible scores are from 1 to
 For example: ⭐⭐⭐⭐
 </SCORE>
 
+<praise>
+If the sentence has NO grammar or fluency issues, write a short positive line here, e.g.: "Good: the sentence is correct and fluent!".
+If there ARE any issues, just write 'ignore_field' here (the issues go in the fields below).
+</praise>
 <grammar>
 List each mistake found, explain the issue briefly, and provide the corrected form.
 If the sentence is correct just write 'ignore_field' in this field.

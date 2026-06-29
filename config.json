@@ -1,5 +1,12 @@
 {
-  "ollama_endpoint": "http://localhost:11434",
-  "model": "gemma3",
+  "provider": "ollama",
+  "ollama": {
+    "endpoint": "http://localhost:11434",
+    "model": "gemma3"
+  },
+  "gemini": {
+    "model": "gemini-3.5-flash"
+  },
+  "conversations_dir": "",
   "deck_configs": {}
 }

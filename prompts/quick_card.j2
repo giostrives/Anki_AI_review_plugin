@@ -1,0 +1,28 @@
+<CONTEXT>
+User fluency: {{user_proficiency}}
+Source language: {{source_language}}
+Source word: {{source_word}}
+Target language: {{target_language}}
+Target word: {{target_word}}
+User answer: {{sentence}}
+</CONTEXT>
+
+<INSTRUCTIONS>
+This is a QUICK check. Do one thing only: decide whether the user demonstrates that they
+know the word.
+
+- If the user wrote a sentence in {{target_language}}: check that {{target_word}} (or a
+  correct inflected form of it) appears and is used with the right meaning. Ignore minor
+  spelling, grammar, or punctuation slips — what matters is that they clearly know and can
+  use the word.
+- If the user wrote a translation: check that it correctly translates the word (accept
+  synonyms and reasonable variants).
+
+Be lenient: if they clearly know the word, the verdict is "correct".
+</INSTRUCTIONS>
+
+<OUTPUT_FORMAT>
+Output exactly these two tags and nothing else:
+<verdict>correct</verdict> or <verdict>incorrect</verdict>
+<feedback>One short, encouraging sentence. If correct, confirm it positively, e.g. "Good: the sentence is correct and fluent!". If incorrect, briefly say what was wrong.</feedback>
+</OUTPUT_FORMAT>

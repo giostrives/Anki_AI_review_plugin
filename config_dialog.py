@@ -8,6 +8,8 @@ from aqt.qt import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                     QFormLayout, QComboBox)
 from aqt.utils import showInfo, tooltip
 
+from . import providers
+
 
 def get_config():
     """Load configuration"""
@@ -29,22 +31,53 @@ class ConfigDialog(QDialog):
     def setup_ui(self):
         self.setWindowTitle("AI Reviewer Configuration")
         self.setMinimumWidth(600)
-        self.setMinimumHeight(500)
+        self.setMinimumHeight(560)
 
         layout = QVBoxLayout()
 
+        # Provider selection
+        provider_group = QGroupBox("AI Provider")
+        provider_layout = QFormLayout()
+        self.provider_select = QComboBox()
+        self.provider_select.addItems(["Ollama", "Gemini"])
+        provider = self.config.get("provider", "ollama")
+        self.provider_select.setCurrentIndex(1 if provider == "gemini" else 0)
+        provider_layout.addRow("Use:", self.provider_select)
+        provider_group.setLayout(provider_layout)
+        layout.addWidget(provider_group)
+
         # Ollama settings
+        ollama_cfg = self.config.get("ollama", {})
         ollama_group = QGroupBox("Ollama Settings")
         ollama_layout = QFormLayout()
-
-        self.endpoint_input = QLineEdit(self.config.get("ollama_endpoint", "http://localhost:11434"))
+        self.endpoint_input = QLineEdit(
+            ollama_cfg.get("endpoint") or self.config.get("ollama_endpoint", "http://localhost:11434"))
         ollama_layout.addRow("Endpoint:", self.endpoint_input)
-
-        self.model_input = QLineEdit(self.config.get("model", "gemma3"))
+        self.model_input = QLineEdit(
+            ollama_cfg.get("model") or self.config.get("model", "gemma3"))
         ollama_layout.addRow("Model:", self.model_input)
-
         ollama_group.setLayout(ollama_layout)
         layout.addWidget(ollama_group)
+
+        # Gemini settings
+        gemini_cfg = self.config.get("gemini", {})
+        gemini_group = QGroupBox("Gemini Settings")
+        gemini_layout = QFormLayout()
+        self.gemini_model_input = QLineEdit(gemini_cfg.get("model", "gemini-3.5-flash"))
+        gemini_layout.addRow("Model:", self.gemini_model_input)
+
+        self.gemini_key_input = QLineEdit(providers.gemini_api_key())
+        self.gemini_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.gemini_key_input.setPlaceholderText("Paste your Gemini API key")
+        gemini_layout.addRow("API Key:", self.gemini_key_input)
+
+        delete_key_btn = QPushButton("Delete API Key")
+        delete_key_btn.clicked.connect(self.delete_gemini_key)
+        gemini_layout.addRow("", delete_key_btn)
+
+        gemini_layout.addRow(QLabel("Stored in the add-on's .env; removed when you uninstall the add-on."))
+        gemini_group.setLayout(gemini_layout)
+        layout.addWidget(gemini_group)
 
         # Deck configuration
         deck_group = QGroupBox("Deck Configuration")
@@ -55,7 +88,7 @@ class ConfigDialog(QDialog):
         deck_layout.addWidget(QLabel("Select a deck to configure:"))
         deck_layout.addWidget(self.deck_list)
 
-        # Language pair settings
+        # Per-deck settings
         lang_layout = QFormLayout()
         self.source_lang = QLineEdit()
         self.target_lang = QLineEdit()
@@ -66,14 +99,14 @@ class ConfigDialog(QDialog):
         self.user_level = QComboBox()
         self.user_level.addItems(["Beginner", "Intermediate", "Advanced"])
 
-        # Task type dropdown
-        self.task_type = QComboBox()
-        self.task_type.addItems(["Language", "Concept", "Mathematical Proof"])
+        # Default review mode dropdown
+        self.review_mode = QComboBox()
+        self.review_mode.addItems(["Full", "Quick"])
 
         lang_layout.addRow("Source Language:", self.source_lang)
         lang_layout.addRow("Target Language:", self.target_lang)
         lang_layout.addRow("User Level:", self.user_level)
-        lang_layout.addRow("Task Type:", self.task_type)
+        lang_layout.addRow("Default Review:", self.review_mode)
         lang_layout.addRow("AI Review:", self.enabled_checkbox)
 
         deck_layout.addLayout(lang_layout)
@@ -121,17 +154,23 @@ class ConfigDialog(QDialog):
             if level_index >= 0:
                 self.user_level.setCurrentIndex(level_index)
 
-            # Load task type
-            task = cfg.get("task", "Language")
-            task_index = self.task_type.findText(task)
-            if task_index >= 0:
-                self.task_type.setCurrentIndex(task_index)
+            # Load review mode
+            mode = cfg.get("review_mode", "full").capitalize()
+            mode_index = self.review_mode.findText(mode)
+            if mode_index >= 0:
+                self.review_mode.setCurrentIndex(mode_index)
         else:
             self.source_lang.setText("")
             self.target_lang.setText("")
             self.enabled_checkbox.setCurrentIndex(0)
             self.user_level.setCurrentIndex(0)
-            self.task_type.setCurrentIndex(0)
+            self.review_mode.setCurrentIndex(0)
+
+    def delete_gemini_key(self):
+        """Clear the stored Gemini API key from .env and the input field"""
+        providers.delete_gemini_api_key()
+        self.gemini_key_input.setText("")
+        tooltip("Gemini API key deleted")
 
     def save_deck_config(self):
         """Save configuration for currently selected deck"""
@@ -153,7 +192,7 @@ class ConfigDialog(QDialog):
             "source_language": self.source_lang.text(),
             "target_language": self.target_lang.text(),
             "user_level": self.user_level.currentText(),
-            "task": self.task_type.currentText(),
+            "review_mode": self.review_mode.currentText().lower(),
             "enabled": self.enabled_checkbox.currentIndex() == 1
         }
 
@@ -161,8 +200,19 @@ class ConfigDialog(QDialog):
 
     def save_and_close(self):
         """Save all settings and close"""
-        self.config["ollama_endpoint"] = self.endpoint_input.text()
-        self.config["model"] = self.model_input.text()
+        self.config["provider"] = "gemini" if self.provider_select.currentIndex() == 1 else "ollama"
+        self.config["ollama"] = {
+            "endpoint": self.endpoint_input.text(),
+            "model": self.model_input.text(),
+        }
+        self.config["gemini"] = {
+            "model": self.gemini_model_input.text(),
+        }
+        # The API key is stored in .env (removed on uninstall), never in the config.
+        providers.set_gemini_api_key(self.gemini_key_input.text().strip())
+        # Drop the obsolete flat keys if present.
+        self.config.pop("ollama_endpoint", None)
+        self.config.pop("model", None)
 
         save_config(self.config)
         tooltip("Configuration saved!")
