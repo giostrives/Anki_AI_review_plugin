@@ -1,13 +1,14 @@
 """
 Main reviewer logic - intercepts card reviews and shows AI interface
 """
+import json
 import re
 import uuid
 from datetime import datetime
 
+from anki.utils import strip_html
 from aqt import mw, gui_hooks
 from aqt.reviewer import Reviewer
-from aqt.utils import showInfo
 from aqt.webview import WebContent
 
 from . import conversations, providers
@@ -20,13 +21,18 @@ class AIReviewer:
         self.current_card = None
         self.deck_config = None
         self.user_answer = None
+        self.peeked = False  # back revealed before answering => AI review skipped
         # Per-card conversation state.
         self.conv_meta = None       # metadata + the human answer, for persistence
         self.first_feedback = None  # the evaluation reply (think-stripped)
         self.chat_system = None     # tutor system prompt for the follow-up chat
         self.chat_messages = None   # follow-up turns only (no evaluation context)
-        self.session_path = conversations.new_session_path(
-            mw.addonManager.getConfig(__name__)
+        config = mw.addonManager.getConfig(__name__)
+        # Only commit to a session file when logging is on; off by default so a
+        # fresh install writes nothing and creates no folder.
+        self.session_path = (
+            conversations.new_session_path(config)
+            if conversations.is_enabled(config) else None
         )
         gui_hooks.reviewer_did_show_question.append(self.on_show_question)
         gui_hooks.webview_will_set_content.append(self.on_webview_will_set_content)
@@ -41,7 +47,16 @@ class AIReviewer:
 
         # Add bridge command handler
         def handle_ai_command(handled, message, context):
+            if message == "aiReview::peek":
+                # Revealing the back before answering forfeits the AI review for
+                # this card; just show the answer so it can be graded normally.
+                self.peeked = True
+                mw.reviewer._showAnswer()
+                return (True, None)
             if message.startswith("aiReview::submit::"):
+                # Ignore a (racing) submit once the back has been revealed.
+                if self.peeked:
+                    return (True, None)
                 # Payload is "<mode>::<answer>"
                 payload = message.replace("aiReview::submit::", "")
                 mode, _, answer = payload.partition("::")
@@ -73,23 +88,43 @@ class AIReviewer:
         deck_id = card.did
         deck_name = mw.col.decks.name(deck_id)
 
-        # Check if AI review is enabled for this deck
+        # Check if AI review is enabled for this deck (or an ancestor opted in).
         config = mw.addonManager.getConfig(__name__)
         deck_configs = config.get("deck_configs", {})
 
-        if deck_name not in deck_configs:
+        deck_config = self._match_deck_config(deck_name, deck_configs)
+        if deck_config is None:
             return  # Use normal review
 
-        self.deck_config = deck_configs[deck_name]
-        if not self.deck_config.get("enabled", False):
-            return  # Use normal review
+        self.deck_config = deck_config
 
         # Store current card and reset user answer
         self.current_card = card
         self.user_answer = None
+        self.peeked = False
 
         # Show AI interface
         self.show_ai_interface()
+
+    @staticmethod
+    def _match_deck_config(deck_name, deck_configs):
+        """Return the enabled deck config governing `deck_name`, or None.
+
+        An exact match wins first (current behavior). Otherwise the nearest
+        ancestor deck (by "::" hierarchy) whose config is enabled AND has
+        `include_subdecks` set governs this subdeck.
+        """
+        cfg = deck_configs.get(deck_name)
+        if cfg is not None:
+            return cfg if cfg.get("enabled", False) else None
+
+        parts = deck_name.split("::")
+        for i in range(len(parts) - 1, 0, -1):
+            ancestor = "::".join(parts[:i])
+            cfg = deck_configs.get(ancestor)
+            if cfg and cfg.get("enabled", False) and cfg.get("include_subdecks", False):
+                return cfg
+        return None
 
     def show_ai_interface(self):
         """Show AI review interface"""
@@ -97,6 +132,9 @@ class AIReviewer:
 
         word = card_data['front']
         instruction = f"Write a sentence using '{word}' in {card_data['target_language']}"
+
+        # The fully rendered back (images, examples, notes) for the toggle view.
+        back_html = self.current_card.answer()
 
         # Default review mode for this deck; the user can flip it before submitting.
         default_mode = self.deck_config.get("review_mode", "full")
@@ -152,6 +190,11 @@ class AIReviewer:
             .air-bubble-user {{ background: #3b82c4 !important; color: #ffffff !important; margin-left: auto; }}
             .air-bubble-ai {{ background: #f4f9fd !important; color: #3f5160 !important; border: 1px solid #e1edf7; margin-right: auto; }}
             .air-bubble-error {{ background: #fdecea !important; color: #b3382c !important; border: 1px solid #f5c6c0; margin-right: auto; }}
+            .air-error {{
+                background: #fdecea; color: #b3382c; border: 1px solid #f5c6c0;
+                border-radius: 12px; padding: 12px 14px; margin-bottom: 14px;
+                font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;
+            }}
             .air-chat-row {{ display: flex; gap: 8px; margin-top: 12px; }}
             .air-chat-input {{
                 flex: 1; min-height: 44px; padding: 10px; border: 1px solid #cfe0ef; border-radius: 10px;
@@ -164,11 +207,26 @@ class AIReviewer:
                 cursor: pointer; background: #3b82c4; color: #ffffff;
             }}
             .air-chat-send:disabled {{ opacity: 0.6; cursor: default; }}
+            .air-view-toggle {{ display: flex; justify-content: flex-end; margin-bottom: 14px; }}
+            .air-view-btn {{
+                padding: 6px 14px; border: 1px solid #cfe0ef; border-radius: 999px;
+                background: #f4f9fd; color: #3b82c4; font-size: 13px; font-weight: 600;
+                cursor: pointer; user-select: none;
+            }}
+            .air-backview {{ font-size: 16px; line-height: 1.6; color: #2b3a47; }}
+            .air-backview img {{ max-width: 100%; height: auto; }}
         </style>
         <div class="air-page">
             <div class="air-card">
+                <div class="air-view-toggle">
+                    <div id="viewToggleBtn" class="air-view-btn" onclick="window.toggleBackView()">Show card back</div>
+                </div>
+
+                <div id="aiBody">
                 <div class="air-word">{word}</div>
                 <div class="air-instruction">{instruction}</div>
+
+                <div id="aiError" class="air-error" style="display: none;"></div>
 
                 <div id="modeToggle" class="air-toggle">
                     <div class="air-pill{quick_active}" data-mode="quick" onclick="window.setAIMode('quick')">Quick review</div>
@@ -181,6 +239,10 @@ class AIReviewer:
 
                 <div id="submitContainer">
                     <button onclick="window.submitAIAnswer()" id="submitBtn" class="air-btn">Submit</button>
+                </div>
+
+                <div id="peekNotice" class="air-instruction" style="display: none; color: #d06b5c; margin-top: 16px;">
+                    You looked at the back, so there's no AI review this time — grade the card as usual and you'll get another shot when it comes back.
                 </div>
 
                 <div id="yourAnswerDisplay" class="air-answer" style="display: none;">
@@ -200,12 +262,42 @@ class AIReviewer:
                         <button onclick="window.sendChat()" id="chatSendBtn" class="air-chat-send">Send</button>
                     </div>
                 </div>
+                </div>
+
+                <div id="backView" class="air-backview" style="display: none;"></div>
             </div>
         </div>
         """
 
         # Show in reviewer
         mw.reviewer.web.eval(f"document.body.innerHTML = `{html}`;")
+
+        # Inject the rendered back, then a toggle between the AI panel and the back.
+        mw.reviewer.web.eval(
+            f"document.getElementById('backView').innerHTML = {json.dumps(back_html)};"
+        )
+        mw.reviewer.web.eval("""
+        window.showingBack = false;
+        window.aiSubmitted = false;
+        window.aiPeeked = false;
+        window.toggleBackView = function() {
+            window.showingBack = !window.showingBack;
+            // Revealing the back BEFORE answering forfeits the AI review for
+            // this card — you only get to use the LLM if you try first.
+            if (window.showingBack && !window.aiSubmitted && !window.aiPeeked) {
+                window.aiPeeked = true;
+                document.getElementById('inputContainer').style.display = 'none';
+                document.getElementById('submitContainer').style.display = 'none';
+                document.getElementById('modeToggle').style.display = 'none';
+                document.getElementById('peekNotice').style.display = 'block';
+                pycmd('aiReview::peek');
+            }
+            document.getElementById('aiBody').style.display = window.showingBack ? 'none' : 'block';
+            document.getElementById('backView').style.display = window.showingBack ? 'block' : 'none';
+            document.getElementById('viewToggleBtn').textContent =
+                window.showingBack ? 'Show AI review' : 'Show card back';
+        };
+        """)
 
         # Inject the JavaScript: mode selection + submit
         mw.reviewer.web.eval(f"""
@@ -218,12 +310,35 @@ class AIReviewer:
         }};
         window.submitAIAnswer = function() {{
             const answer = document.getElementById('aiAnswer').value.trim();
-            if (!answer) {{
-                alert('Please enter an answer');
+            if (answer.length < 2) {{
+                alert('Please enter a longer answer (at least 2 characters)');
                 return;
             }}
+            // Clear any prior failure banner before the new attempt.
+            const err = document.getElementById('aiError');
+            if (err) {{ err.style.display = 'none'; err.textContent = ''; }}
+            window.aiSubmitted = true;
             // Send mode + answer to Python (button updated from Python side)
             pycmd('aiReview::submit::' + window.aiSelectedMode + '::' + answer);
+        }};
+
+        // LLM evaluation failed: drop back to the edit/send screen with the prior
+        // answer still in the textarea and the error shown on top.
+        window.aiEvalError = function(msg) {{
+            document.getElementById('feedback').style.display = 'none';
+            document.getElementById('yourAnswerDisplay').style.display = 'none';
+            document.getElementById('inputContainer').style.display = 'block';
+            document.getElementById('submitContainer').style.display = 'block';
+            document.getElementById('modeToggle').style.display = 'flex';
+            const btn = document.getElementById('submitBtn');
+            if (btn) {{ btn.disabled = false; btn.textContent = 'Submit'; }}
+            const err = document.getElementById('aiError');
+            if (err) {{
+                err.textContent = 'The AI review failed: ' + msg
+                    + '\\n\\nEdit your answer and submit again, or click "Show card back" to grade the card normally.';
+                err.style.display = 'block';
+                err.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+            }}
         }};
 
         // --- Follow-up chat ---
@@ -242,7 +357,27 @@ class AIReviewer:
             document.getElementById('chatInput').disabled = false;
         }};
         window.chatReply = function(text) {{ window.appendBubble('ai', text); window.endChatWait(); }};
-        window.chatError = function(text) {{ window.appendBubble('error', text); window.endChatWait(); }};
+        window.chatError = function(text) {{
+            if (window._aiStreamBubble) {{ window._aiStreamBubble.remove(); window._aiStreamBubble = null; }}
+            window.appendBubble('error', text); window.endChatWait();
+        }};
+        // Streaming AI bubble: created empty, filled delta-by-delta.
+        window.startAIStream = function() {{
+            const div = document.createElement('div');
+            div.className = 'air-bubble air-bubble-ai';
+            document.getElementById('chatThread').appendChild(div);
+            window._aiStreamBubble = div;
+            div.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+        }};
+        window.streamAIBubble = function(text) {{
+            if (window._aiStreamBubble) {{
+                window._aiStreamBubble.textContent = text;
+                window._aiStreamBubble.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+            }}
+        }};
+        window.endAIStream = function(text) {{
+            window.streamAIBubble(text); window._aiStreamBubble = null; window.endChatWait();
+        }};
         window.sendChat = function() {{
             const input = document.getElementById('chatInput');
             const text = input.value.trim();
@@ -254,6 +389,19 @@ class AIReviewer:
             input.disabled = true;
             pycmd('aiReview::chat::' + text);
         }};
+
+        // Enter sends; Shift+Enter inserts a newline.
+        window.aiSendOnEnter = function(el, fn) {{
+            if (!el) return;
+            el.addEventListener('keydown', function(e) {{
+                if (e.key === 'Enter' && !e.shiftKey) {{
+                    e.preventDefault();
+                    fn();
+                }}
+            }});
+        }};
+        window.aiSendOnEnter(document.getElementById('aiAnswer'), window.submitAIAnswer);
+        window.aiSendOnEnter(document.getElementById('chatInput'), window.sendChat);
         """)
 
     def get_card_data(self):
@@ -267,9 +415,15 @@ class AIReviewer:
         # Extract just the word from back (remove examples, etc.)
         back_word = back.split('\n')[0].split('(')[0].strip()
 
+        # Plain-text of the whole back (meaning, examples, notes) for the LLM.
+        # strip_html (NORMAL mode) removes HTML tags, <img>, and [sound:…] refs
+        # entirely, so no images/audio are sent — only text.
+        back_text = re.sub(r'\s+\n', '\n', strip_html(back)).strip()
+
         return {
             "front": front.strip(),
             "back": back_word,
+            "back_text": back_text,
             "source_language": self.deck_config.get("source_language", "English"),
             "target_language": self.deck_config.get("target_language", "Spanish")
         }
@@ -286,86 +440,128 @@ class AIReviewer:
             target_language=card_data['target_language'],
             source_word=card_data['front'],
             target_word=card_data['back'],
+            card_back=card_data['back_text'],
             sentence=answer
         )
         system = system_prompt.render()
+        messages = [{"role": "user", "content": prompt}]
 
-        try:
-            ai_feedback = providers.call_llm(config, system, prompt)
-        except Exception as e:
-            showInfo(str(e))
-            mw.reviewer.web.eval("""
-                const btn = document.getElementById('submitBtn');
-                if (btn) { btn.disabled = false; btn.textContent = 'Submit'; }
-            """)
-            return
+        web = mw.reviewer.web
 
-        # Never surface the model's chain-of-thought.
-        ai_feedback = self._strip_think(ai_feedback)
-
-        # Set up the follow-up chat with its OWN tutor framing, decoupled from the
-        # evaluation prompt — so follow-ups are a normal conversation (no scores,
-        # XML, or <think>), not another review. Only the follow-up turns are sent;
-        # the card context lives in chat_system.
-        self.conv_meta = self._build_conv_meta(config, card_data, answer, mode)
-        self.first_feedback = ai_feedback
-        self.chat_system = conversation_prompt.render(
-            user_proficiency=self.deck_config.get("user_level", "Beginner").lower(),
-            source_language=card_data['source_language'],
-            target_language=card_data['target_language'],
-            source_word=card_data['front'],
-            target_word=card_data['back'],
-            sentence=answer,
-            feedback=self._plainify(ai_feedback),
-        )
-        self.chat_messages = []
-
-        # Parse the response into HTML depending on the review mode.
-        if mode == "quick":
-            feedback_html = self.parse_quick_to_html(ai_feedback)
-        else:
-            feedback_html = self.parse_feedback_to_html(ai_feedback)
-
-        # Transform UI: hide inputs, show compact answer and feedback
-        answer_escaped = answer.replace('`', '\\`').replace('$', '\\$').replace("'", "\\'")
-        feedback_escaped = feedback_html.replace('`', '\\`').replace('$', '\\$').replace('\n', '\\n').replace("'", "\\'")
-
-        js = f"""
+        # Reveal the answer + feedback shell immediately so streamed text has a
+        # home and the card-back toggle stays usable while the model works.
+        web.eval(f"""
         document.getElementById('inputContainer').style.display = 'none';
         document.getElementById('submitContainer').style.display = 'none';
         document.getElementById('modeToggle').style.display = 'none';
-
         document.getElementById('yourAnswerDisplay').style.display = 'block';
-        document.getElementById('yourAnswerText').textContent = '{answer_escaped}';
-
+        document.getElementById('yourAnswerText').textContent = '{self._js_escape(answer)}';
         document.getElementById('feedback').style.display = 'block';
-        document.getElementById('feedbackText').innerHTML = '{feedback_escaped}';
+        document.getElementById('feedbackText').textContent = '…';
+        """)
 
-        document.getElementById('chatBlock').style.display = 'block';
-        """
-        mw.reviewer.web.eval(js)
+        def task():
+            buf = []
 
-        # Now show the answer to enable Anki's native buttons
-        mw.reviewer._showAnswer()
+            def on_chunk(delta):
+                buf.append(delta)
+                # Live progress view: drop <think>/tags so raw markup never flashes.
+                cleaned = self._plainify(self._strip_think("".join(buf)))
+                mw.taskman.run_on_main(
+                    lambda c=cleaned: web.eval(
+                        f"document.getElementById('feedbackText').textContent = '{self._js_escape(c)}';"
+                    )
+                )
+
+            return providers.stream_llm(config, system, messages, on_chunk)
+
+        def on_done(future):
+            try:
+                ai_feedback = future.result()
+            except Exception as e:
+                conversations.append_error(config, f"Evaluation failed: {e}")
+                # Return to the edit/send screen with the error shown on top so
+                # the user can tweak the answer and resubmit (or turn the card).
+                web.eval(f"window.aiEvalError('{self._js_escape(str(e))}');")
+                return
+
+            # Never surface the model's chain-of-thought.
+            ai_feedback = self._strip_think(ai_feedback)
+
+            # Set up the follow-up chat with its OWN tutor framing, decoupled from
+            # the evaluation prompt — so follow-ups are a normal conversation (no
+            # scores, XML, or <think>), not another review. Only the follow-up
+            # turns are sent; the card context lives in chat_system.
+            self.conv_meta = self._build_conv_meta(config, card_data, answer, mode)
+            self.first_feedback = ai_feedback
+            self.chat_system = conversation_prompt.render(
+                user_proficiency=self.deck_config.get("user_level", "Beginner").lower(),
+                source_language=card_data['source_language'],
+                target_language=card_data['target_language'],
+                source_word=card_data['front'],
+                target_word=card_data['back'],
+                card_back=card_data['back_text'],
+                sentence=answer,
+                feedback=self._plainify(ai_feedback),
+            )
+            self.chat_messages = []
+
+            # Swap the live streamed text for the parsed, formatted feedback.
+            if mode == "quick":
+                feedback_html = self.parse_quick_to_html(ai_feedback)
+            else:
+                feedback_html = self.parse_feedback_to_html(ai_feedback)
+
+            web.eval(f"""
+            document.getElementById('feedbackText').innerHTML = '{self._js_escape(feedback_html)}';
+            document.getElementById('chatBlock').style.display = 'block';
+            """)
+
+            # Now show the answer to enable Anki's native buttons.
+            mw.reviewer._showAnswer()
+
+        mw.taskman.run_in_background(task, on_done)
 
     def send_chat(self, text):
-        """Handle a follow-up chat turn under the tutor (conversation) framing."""
+        """Handle a follow-up chat turn under the tutor (conversation) framing.
+
+        Runs off the main thread and streams the reply into the chat bubble.
+        """
         if self.conv_meta is None or self.chat_system is None:
             return
         config = mw.addonManager.getConfig(__name__)
+        web = mw.reviewer.web
 
         self.chat_messages.append({"role": "user", "content": text})
-        try:
-            reply = providers.chat_llm(config, self.chat_system, self.chat_messages)
-        except Exception as e:
-            # Drop the failed turn so a retry doesn't duplicate it.
-            self.chat_messages.pop()
-            mw.reviewer.web.eval(f"window.chatError('{self._js_escape(str(e))}');")
-            return
+        web.eval("window.startAIStream();")
 
-        reply = self._strip_think(reply)
-        self.chat_messages.append({"role": "assistant", "content": reply})
-        mw.reviewer.web.eval(f"window.chatReply('{self._js_escape(reply)}');")
+        def task():
+            buf = []
+
+            def on_chunk(delta):
+                buf.append(delta)
+                cleaned = self._strip_think("".join(buf))
+                mw.taskman.run_on_main(
+                    lambda c=cleaned: web.eval(f"window.streamAIBubble('{self._js_escape(c)}');")
+                )
+
+            return providers.stream_llm(config, self.chat_system, self.chat_messages, on_chunk)
+
+        def on_done(future):
+            try:
+                reply = future.result()
+            except Exception as e:
+                conversations.append_error(config, f"Chat failed: {e}")
+                # Drop the failed turn so a retry doesn't duplicate it.
+                self.chat_messages.pop()
+                web.eval(f"window.chatError('{self._js_escape(str(e))}');")
+                return
+
+            reply = self._strip_think(reply)
+            self.chat_messages.append({"role": "assistant", "content": reply})
+            web.eval(f"window.endAIStream('{self._js_escape(reply)}');")
+
+        mw.taskman.run_in_background(task, on_done)
 
     def _build_conv_meta(self, config, card_data, answer, mode):
         provider = config.get("provider", "ollama")
@@ -403,9 +599,10 @@ class AIReviewer:
         record["messages"] = messages
 
         config = mw.addonManager.getConfig(__name__)
-        if not self.session_path:
-            self.session_path = conversations.new_session_path(config)
-        conversations.append_conversation(self.session_path, record)
+        if conversations.is_enabled(config):
+            if not self.session_path:
+                self.session_path = conversations.new_session_path(config)
+            conversations.append_conversation(self.session_path, record)
         self._reset_conversation()
 
     def _reset_conversation(self):
@@ -470,10 +667,12 @@ class AIReviewer:
         if score:
             html_parts.append(f'<div class="feedback-score"><strong>Score:</strong> {score}</div>')
 
-        # Positive feedback when the sentence has no issues.
+        # Positive feedback when the sentence has no issues, or the meaning
+        # verdict for a translation answer (✗ => wrong, render it red not green).
         praise = extract_tag_content('praise', feedback)
         if praise:
-            html_parts.append(f'<div style="color: #2f9e6f; font-weight: 600;">{praise}</div>')
+            color = '#d06b5c' if praise.lstrip().startswith('✗') else '#2f9e6f'
+            html_parts.append(f'<div style="color: {color}; font-weight: 600;">{praise}</div>')
 
         # Extract grammar section
         grammar = extract_tag_content('grammar', feedback)

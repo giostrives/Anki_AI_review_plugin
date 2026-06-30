@@ -2,10 +2,12 @@
 Configuration dialog for AI Reviewer
 """
 
+import os
+
 from aqt import mw
 from aqt.qt import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                     QLineEdit, QPushButton, QListWidget, QGroupBox,
-                    QFormLayout, QComboBox)
+                    QFormLayout, QComboBox, QFileDialog, Qt)
 from aqt.utils import showInfo, tooltip
 
 from . import providers
@@ -79,6 +81,31 @@ class ConfigDialog(QDialog):
         gemini_group.setLayout(gemini_layout)
         layout.addWidget(gemini_group)
 
+        # Logging settings (off by default; saves conversations + errors to a folder)
+        logging_group = QGroupBox("Logging")
+        logging_layout = QFormLayout()
+        self.logging_enabled = QComboBox()
+        self.logging_enabled.addItems(["Disabled", "Enabled"])
+        self.logging_enabled.setCurrentIndex(1 if self.config.get("logging_enabled") else 0)
+        logging_layout.addRow("Save logs:", self.logging_enabled)
+
+        log_dir_row = QHBoxLayout()
+        self.log_dir_input = QLineEdit(self.config.get("conversations_dir", ""))
+        self.log_dir_input.setPlaceholderText("Default folder")
+        browse_btn = QPushButton("Browse…")
+        browse_btn.clicked.connect(self.choose_log_dir)
+        log_dir_row.addWidget(self.log_dir_input)
+        log_dir_row.addWidget(browse_btn)
+        logging_layout.addRow("Folder:", log_dir_row)
+
+        logging_hint = QLabel(
+            "Leave the folder blank to use the add-on's user_files folder. "
+            "Stores per-session conversations and an errors.log.")
+        logging_hint.setWordWrap(True)
+        logging_layout.addRow(logging_hint)
+        logging_group.setLayout(logging_layout)
+        layout.addWidget(logging_group)
+
         # Deck configuration
         deck_group = QGroupBox("Deck Configuration")
         deck_layout = QVBoxLayout()
@@ -95,6 +122,10 @@ class ConfigDialog(QDialog):
         self.enabled_checkbox = QComboBox()
         self.enabled_checkbox.addItems(["Disabled", "Enabled"])
 
+        # Apply this deck's config to all of its subdecks
+        self.subdeck_checkbox = QComboBox()
+        self.subdeck_checkbox.addItems(["Disabled", "Enabled"])
+
         # User level dropdown
         self.user_level = QComboBox()
         self.user_level.addItems(["Beginner", "Intermediate", "Advanced"])
@@ -108,6 +139,7 @@ class ConfigDialog(QDialog):
         lang_layout.addRow("User Level:", self.user_level)
         lang_layout.addRow("Default Review:", self.review_mode)
         lang_layout.addRow("AI Review:", self.enabled_checkbox)
+        lang_layout.addRow("Apply to subdecks:", self.subdeck_checkbox)
 
         deck_layout.addLayout(lang_layout)
 
@@ -132,10 +164,26 @@ class ConfigDialog(QDialog):
         self.setLayout(layout)
 
     def load_decks(self):
-        """Load all decks into the list"""
+        """Load decks into the list, collapsing subdecks already covered by a parent.
+
+        When a deck is enabled with "Apply to subdecks", its descendants inherit
+        that config (see reviewer._match_deck_config), so listing them just adds
+        clutter. Hide such descendants — unless they have their own explicit
+        config, which would override the parent.
+        """
         self.deck_list.clear()
+        deck_configs = self.config.get("deck_configs", {})
+        covered_parents = [
+            name for name, cfg in deck_configs.items()
+            if cfg.get("enabled") and cfg.get("include_subdecks")
+        ]
         for deck in mw.col.decks.all_names_and_ids():
-            self.deck_list.addItem(deck.name)
+            name = deck.name
+            if name not in deck_configs and any(
+                name.startswith(parent + "::") for parent in covered_parents
+            ):
+                continue
+            self.deck_list.addItem(name)
 
     def on_deck_selected(self, item):
         """Load configuration for selected deck"""
@@ -147,6 +195,7 @@ class ConfigDialog(QDialog):
             self.source_lang.setText(cfg.get("source_language", ""))
             self.target_lang.setText(cfg.get("target_language", ""))
             self.enabled_checkbox.setCurrentIndex(1 if cfg.get("enabled", False) else 0)
+            self.subdeck_checkbox.setCurrentIndex(1 if cfg.get("include_subdecks", False) else 0)
 
             # Load user level
             level = cfg.get("user_level", "Beginner")
@@ -163,8 +212,16 @@ class ConfigDialog(QDialog):
             self.source_lang.setText("")
             self.target_lang.setText("")
             self.enabled_checkbox.setCurrentIndex(0)
+            self.subdeck_checkbox.setCurrentIndex(0)
             self.user_level.setCurrentIndex(0)
             self.review_mode.setCurrentIndex(0)
+
+    def choose_log_dir(self):
+        """Open a folder picker for the log/conversations directory."""
+        start = self.log_dir_input.text() or os.path.expanduser("~")
+        path = QFileDialog.getExistingDirectory(self, "Select Log Folder", start)
+        if path:
+            self.log_dir_input.setText(path)
 
     def delete_gemini_key(self):
         """Clear the stored Gemini API key from .env and the input field"""
@@ -193,10 +250,16 @@ class ConfigDialog(QDialog):
             "target_language": self.target_lang.text(),
             "user_level": self.user_level.currentText(),
             "review_mode": self.review_mode.currentText().lower(),
-            "enabled": self.enabled_checkbox.currentIndex() == 1
+            "enabled": self.enabled_checkbox.currentIndex() == 1,
+            "include_subdecks": self.subdeck_checkbox.currentIndex() == 1
         }
 
         tooltip(f"Configuration saved for {deck_name}")
+        # Reflect "Apply to subdecks" immediately: collapse newly covered subdecks.
+        self.load_decks()
+        match = self.deck_list.findItems(deck_name, Qt.MatchFlag.MatchExactly)
+        if match:
+            self.deck_list.setCurrentItem(match[0])
 
     def save_and_close(self):
         """Save all settings and close"""
@@ -208,6 +271,8 @@ class ConfigDialog(QDialog):
         self.config["gemini"] = {
             "model": self.gemini_model_input.text(),
         }
+        self.config["logging_enabled"] = self.logging_enabled.currentIndex() == 1
+        self.config["conversations_dir"] = self.log_dir_input.text().strip()
         # The API key is stored in .env (removed on uninstall), never in the config.
         providers.set_gemini_api_key(self.gemini_key_input.text().strip())
         # Drop the obsolete flat keys if present.

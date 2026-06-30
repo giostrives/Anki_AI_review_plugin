@@ -1,10 +1,11 @@
 <CONTEXT>
 User fluency: {{user_proficiency}}
-Source language: {{source_language}}
+Mother tongue of the student: {{source_language}}
 Source word: {{source_word}}
-Target language: {{target_language}}
+Language being learned: {{target_language}}
 Target word: {{target_word}}
-User answer: {{sentence}}
+{% if card_back %}Card back (reference — reuse the meaning/examples if useful): {{card_back}}
+{% endif %}User answer: {{sentence}}
 </CONTEXT>
 
 <INSTRUCTIONS>

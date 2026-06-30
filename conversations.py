@@ -13,6 +13,11 @@ from datetime import datetime
 _addon_dir = os.path.dirname(os.path.abspath(__file__))
 
 
+def is_enabled(config):
+    """Whether logging (conversation + error files) is turned on. Off by default."""
+    return bool(config.get("logging_enabled"))
+
+
 def default_dir(config):
     """Return the folder where conversations are stored, creating it if needed.
 
@@ -40,3 +45,21 @@ def append_conversation(path, record):
     except Exception as e:
         # Persistence must never break a review.
         print(f"[AI Reviewer] Failed to save conversation: {e}")
+
+
+def append_error(config, message):
+    """Append a timestamped error line to `errors.log`. Best-effort: never raises.
+
+    No-op when logging is disabled, so failures stay invisible on disk until the
+    user opts in to a log folder.
+    """
+    if not is_enabled(config):
+        return
+    try:
+        stamp = datetime.now().isoformat(timespec="seconds")
+        path = os.path.join(default_dir(config), "errors.log")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{stamp}\t{message}\n")
+    except Exception as e:
+        # Logging must never break a review.
+        print(f"[AI Reviewer] Failed to write error log: {e}")

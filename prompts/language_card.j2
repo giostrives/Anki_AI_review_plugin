@@ -1,14 +1,22 @@
 <CONTEXT>
 User fluency: {{user_proficiency}}
-Source language: {{source_language}}
+Mother tongue of the student: {{source_language}}
 Source word: {{source_word}}
-Target language: {{target_language}}
+Language being learned: {{target_language}}
 Target word: {{target_word}}
-User sentence: {{sentence}}
+{% if card_back %}Card back (reference — reuse the meaning/examples if useful): {{card_back}}
+{% endif %}User sentence: {{sentence}}
 </CONTEXT>
 
 <INSTRUCTIONS>
-Evaluate the user's sentence according to the following criteria:
+First decide what kind of answer the user gave.
+
+**If the user answered with a translation or a meaning description of {{target_word}}** (rather than a full sentence that uses it): do NOT evaluate grammar, fluency, spelling, or completeness. Judge only whether their stated meaning is correct (accept synonyms and reasonable variants). Then:
+- Write a one-line verdict in `<praise>`, beginning with ✓ if the meaning is correct or ✗ if it is wrong, followed by a brief note (and the correct meaning if they were wrong).
+- Write 'ignore_field' in `<SCORE>`, `<grammar>`, and `<fluency>`.
+- Still provide one natural example sentence using {{target_word}} in `<paraphrase>`.
+
+**Otherwise (the user wrote a sentence using {{target_word}})**, evaluate it according to the following criteria:
 
 a. **Target word usage**: Check whether {{target_word}} appears and is used correctly in meaning, collocation, and grammatical context.
 b. **Spelling / orthography**: Identify spelling errors, especially for the target word or other notable words.
