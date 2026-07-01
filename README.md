@@ -25,12 +25,19 @@ flow.
 - **Two AI backends** — run locally with **Ollama**, or use **Google Gemini**.
 - **Conversation log** — every review (and its follow-ups) is saved to a per-session file,
   for your own history/analysis.
-- A clean, light interface that replaces the card while you answer, then hands back to
-  Anki's normal grading buttons.
+- **Native look** — the card renders exactly as Anki would show it (your card template,
+  styling, and images), with the AI panel beneath it. Two themes:
+  - **Native (default)** — built entirely on Anki's own theme variables, so it matches
+    whatever Anki theme you use, light or dark, and follows night-mode switches live.
+  - **Polished** — a custom slate-and-indigo design with its own light and dark variants.
+- Grading stays 100% native: after the feedback the card flips and you use Anki's normal
+  Again/Hard/Good/Easy buttons.
 
 ## Requirements
 
-- **Anki / aqt 25.9.x** (the versions pinned in `requirements.txt`).
+- **Anki 2.1.55 or newer** (the add-on's Native theme uses Anki's built-in CSS theme
+  variables, introduced in 2.1.55). Developed and tested against **Anki / aqt 25.9.x**
+  (the versions pinned in `requirements.txt`).
 - **Python 3.11** for the local dev setup (see below).
 - An AI backend — **one** of:
   - **Ollama** (recommended to start): a local LLM server. No API key, nothing leaves your
@@ -71,15 +78,23 @@ to install or vendor.
 
 Open **Tools → AI Reviewer Settings**.
 
-1. **AI Provider** — choose **Ollama** or **Gemini**.
-2. **Ollama Settings** — endpoint (default `http://localhost:11434`) and model
+1. **Appearance** — pick the panel theme: **Native (match Anki)** or **Polished**.
+   Takes effect on the next card.
+2. **AI Provider** — choose **Ollama** or **Gemini**.
+3. **Ollama Settings** — endpoint (default `http://localhost:11434`) and model
    (default `gemma3`).
-3. **Gemini Settings** — model (default `gemini-3.5-flash`) and your API key. The key is
+4. **Gemini Settings** — model (default `gemini-3.5-flash`) and your API key. The key is
    stored in the add-on's `.env` file, can be deleted with the **Delete API Key** button,
    and is removed automatically when you uninstall the add-on. It is never written into
    Anki's synced config. (You can also set it manually in `.env` as `GEMINI_API_KEY=...`.)
-4. **Deck Configuration** — pick a deck and set:
+5. **Deck Configuration** — pick a deck and set:
    - **Source / Target language** (the language pair for that deck)
+   - **First field holds** — whether the note's *first* field is the **word being
+     learned** (e.g. "comprometido" first, default) or its **meaning/translation**
+     (e.g. "committed" first). The plugin uses this to word the exercise correctly and
+     to tell the model which word is which. Reversed cards ("Basic (and reversed)")
+     are detected automatically from the card template, and the instruction never
+     reveals the hidden side.
    - **User level** (Beginner / Intermediate / Advanced)
    - **Default Review** (Full or Quick)
    - **AI Review** (Enabled / Disabled) — only enabled decks are intercepted.
@@ -88,15 +103,32 @@ Open **Tools → AI Reviewer Settings**.
 
 ## Usage
 
-Review an enabled deck as usual. For each card you'll see the prompt word and an input box:
+Review an enabled deck as usual. Each card shows normally, with the AI panel underneath:
 
 1. Optionally flip the **Quick review / Full review** toggle for this card.
-2. Type your answer and press **Submit**.
-3. Read the AI feedback. You can now **ask follow-up questions** in the chat box that
-   appears — the model keeps the card's context for the whole exchange.
+2. Type your answer and press **Submit** (Enter sends; Shift+Enter adds a newline).
+3. Read the verdict and feedback. The card flips to its back automatically. You can now
+   **ask follow-up questions** via the "Ask a follow-up" button — the model keeps the
+   card's context for the whole exchange.
 4. Grade the card with Anki's normal Again/Hard/Good/Easy buttons whenever you're done.
 
+Revealing the answer *before* submitting (the "Show answer instead" button, Anki's own
+Show Answer button, or the keyboard) skips the AI review for that card — you only get
+the LLM's feedback if you try first.
+
 Decks that aren't enabled in the settings behave like normal Anki cards.
+
+## Running the tests
+
+```bash
+./venv/bin/python -m pytest
+```
+
+The suite under `tests/` covers the feedback parsing, card direction / field-layout
+detection (including reversed cards), deck-config matching, conversation logging, and
+the provider plumbing (`.env` handling, request building, stream parsing — all offline
+with fakes). If Node.js is installed, it also smoke-tests the review panel's
+JavaScript against a DOM stub; without Node that one test is skipped.
 
 ## Conversation history
 
@@ -115,6 +147,7 @@ isn't used by the add-on yet — it's there for your own history, analysis, or e
 | `conversations.py` | Saves each conversation to the per-session JSONL log |
 | `config_dialog.py` | The settings dialog |
 | `prompts/` | Jinja2 prompt templates (`language_card.j2` = full, `quick_card.j2` = quick, `system_prompt.j2`) |
+| `web/` | The review panel's JS (`ai_review.js`) and themes (`ai_review.css`, `ai_review_polished.css`) |
+| `tests/` | Pytest suite (plus the Node-based JS panel test) |
 | `config.json` | Default configuration |
 | `.env` | Holds `GEMINI_API_KEY` (git-ignored) |
-s

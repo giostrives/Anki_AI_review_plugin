@@ -1,6 +1,6 @@
 """
 Anki AI Reviewer Plugin
-Replaces card review with AI-generated exercises using Ollama
+Adds an AI writing exercise + feedback panel to card reviews
 """
 
 from aqt import mw, gui_hooks
@@ -14,7 +14,10 @@ ai_reviewer = None
 
 def init_ai_reviewer():
     global ai_reviewer
-    ai_reviewer = AIReviewer()
+    # Guard against re-creation on profile switches: AIReviewer registers
+    # gui_hooks in its constructor, and a second instance would double them.
+    if ai_reviewer is None:
+        ai_reviewer = AIReviewer()
 
 def show_config():
     """Show configuration dialog"""
@@ -26,8 +29,14 @@ def setup_menu():
     action.triggered.connect(show_config)
     mw.form.menuTools.addAction(action)
 
-# Initialize on profile load
-gui_hooks.profile_did_open.append(init_ai_reviewer)
+# mw is None when the module is imported outside a running Anki (e.g. by
+# the test suite); everything below only makes sense inside the app.
+if mw is not None:
+    # Serve the panel's CSS/JS to Anki's webviews at /_addons/<package>/web/…
+    mw.addonManager.setWebExports(__name__, r"web/.*(css|js)")
 
-# Setup menu
-setup_menu()
+    # Initialize on profile load
+    gui_hooks.profile_did_open.append(init_ai_reviewer)
+
+    # Setup menu
+    setup_menu()

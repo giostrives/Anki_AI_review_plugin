@@ -136,6 +136,7 @@ celerybeat.pid
 
 # Anki add-on runtime data (conversation logs, etc.)
 user_files/
+meta.json
 
 # Environments
 .env
@@ -211,3 +212,4 @@ __marimo__/
 
 .idea
 .DS_Store
+.claude

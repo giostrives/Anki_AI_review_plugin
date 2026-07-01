@@ -1,0 +1,287 @@
+/*
+ * AI Review panel — structure + "native" theme.
+ *
+ * Everything is scoped under #ai-review-root so the panel can't restyle card
+ * templates and card CSS can't leak in (the resets below undo the common
+ * card-template styles: centered text, custom fonts).
+ *
+ * Components only consume the --air-* properties. The native theme maps them
+ * to Anki's own theme variables (available in the reviewer since 2.1.55),
+ * so it follows the user's Anki theme — including live night-mode switches —
+ * with no addon code. The "polished" theme lives in ai_review_polished.css.
+ */
+
+/* The JS toggles visibility via the hidden attribute; without this rule an
+   explicit display (e.g. flex on .air-mode) would override it. */
+#ai-review-root [hidden] {
+    display: none !important;
+}
+
+#ai-review-root {
+    text-align: left;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+    font-size: 15px;
+    font-weight: normal;
+    line-height: 1.55;
+    color: var(--air-fg);
+}
+
+/* The var() fallbacks cover Anki versions where a variable predates the
+   current naming (everything here exists in 2.1.55+, fallbacks are belt
+   and braces for point releases in between). */
+#ai-review-root[data-air-theme="native"] {
+    --air-fg: var(--fg, #020202);
+    --air-fg-subtle: var(--fg-subtle, #737373);
+    --air-surface: var(--canvas, #f5f5f5);
+    --air-surface-raised: var(--canvas-elevated, #ffffff);
+    --air-inset: var(--canvas-inset, var(--canvas, #ffffff));
+    --air-border: var(--border, #c4c4c4);
+    --air-border-subtle: var(--border-subtle, #ebebeb);
+    --air-focus: var(--border-focus, #3b82f6);
+    --air-accent: var(--button-primary-bg, #306bec);
+    --air-accent-fg: white;
+    --air-link: var(--fg-link, #1d4ed8);
+    --air-button-bg: var(--button-bg, #fcfcfc);
+    --air-radius: var(--border-radius, 5px);
+    --air-radius-large: var(--border-radius-medium, 12px);
+    --air-bad: var(--accent-danger, #ef4444);
+    --air-ok: #2e9e58;
+    --air-warn: #b07d24;
+}
+
+:root.night-mode #ai-review-root[data-air-theme="native"] {
+    --air-ok: #5fc588;
+    --air-warn: #d9a94e;
+}
+
+.air-panel {
+    max-width: 640px;
+    margin: 24px auto 12px;
+    padding: 16px;
+    background: var(--air-surface-raised);
+    border: 1px solid var(--air-border-subtle);
+    border-radius: var(--air-radius-large);
+}
+
+.air-label {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--air-fg-subtle);
+    margin-bottom: 4px;
+}
+
+.air-instruction {
+    color: var(--air-fg-subtle);
+    margin-bottom: 12px;
+}
+
+.air-error {
+    /* Plain fallback first: older webviews without color-mix keep a
+       readable background instead of dropping the declaration. */
+    background: var(--air-surface-raised);
+    background: color-mix(in srgb, var(--air-bad) 10%, var(--air-surface-raised));
+    border: 1px solid var(--air-bad);
+    color: var(--air-fg);
+    border-radius: var(--air-radius);
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    font-size: 14px;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.air-notice {
+    color: var(--air-fg-subtle);
+    font-size: 14px;
+    margin-bottom: 4px;
+}
+
+/* Quick/full mode pills: ghost when inactive, filled when active. */
+.air-mode {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.air-pill {
+    padding: 4px 14px;
+    border: 1px solid var(--air-border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--air-fg-subtle);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.air-pill.air-active {
+    background: var(--air-accent);
+    border-color: var(--air-accent);
+    color: var(--air-accent-fg);
+}
+
+#ai-review-root textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    border: 1px solid var(--air-border);
+    border-radius: var(--air-radius);
+    background: var(--air-inset);
+    color: var(--air-fg);
+    font: inherit;
+    resize: vertical;
+}
+
+#ai-review-root textarea:focus {
+    outline: none;
+    border-color: var(--air-focus);
+}
+
+.air-input {
+    min-height: 96px;
+}
+
+.air-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+#ai-review-root button {
+    font: inherit;
+    cursor: pointer;
+}
+
+#ai-review-root button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+#ai-review-root button:focus-visible {
+    outline: 2px solid var(--air-focus);
+    outline-offset: 2px;
+}
+
+.air-submit,
+.air-chat-send {
+    padding: 6px 20px;
+    border: 1px solid var(--air-accent);
+    border-radius: var(--air-radius);
+    background: var(--air-accent);
+    color: var(--air-accent-fg);
+    font-weight: 600;
+}
+
+.air-ghost {
+    padding: 4px 10px;
+    border: none;
+    border-radius: var(--air-radius);
+    background: transparent;
+    color: var(--air-link);
+    font-size: 13px;
+}
+
+/* Answer echo + feedback. */
+.air-answer,
+.air-feedback {
+    background: var(--air-surface);
+    border: 1px solid var(--air-border-subtle);
+    border-radius: var(--air-radius);
+    padding: 12px;
+    margin-top: 12px;
+}
+
+.air-answer-text,
+.air-summary,
+.air-section-text,
+.air-feedback-body {
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.air-verdict {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.air-verdict-label {
+    font-size: 17px;
+    font-weight: 600;
+}
+
+.air-verdict.air-correct .air-verdict-label { color: var(--air-ok); }
+.air-verdict.air-partial .air-verdict-label { color: var(--air-warn); }
+.air-verdict.air-incorrect .air-verdict-label { color: var(--air-bad); }
+
+.air-score {
+    font-size: 13px;
+    color: var(--air-fg-subtle);
+}
+
+.air-summary {
+    margin-bottom: 8px;
+}
+
+.air-section {
+    margin-top: 8px;
+}
+
+.air-section .air-label {
+    margin-bottom: 2px;
+}
+
+/* Follow-up chat. */
+.air-chat {
+    margin-top: 12px;
+}
+
+.air-bubble {
+    padding: 8px 12px;
+    border-radius: var(--air-radius-large);
+    margin-bottom: 8px;
+    max-width: 85%;
+    font-size: 14px;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.air-bubble-user {
+    background: var(--air-accent);
+    color: var(--air-accent-fg);
+    margin-left: auto;
+    width: fit-content;
+}
+
+.air-bubble-ai {
+    background: var(--air-surface);
+    border: 1px solid var(--air-border-subtle);
+    margin-right: auto;
+    width: fit-content;
+}
+
+.air-bubble-error {
+    background: var(--air-surface);
+    background: color-mix(in srgb, var(--air-bad) 10%, var(--air-surface));
+    border: 1px solid var(--air-bad);
+    margin-right: auto;
+    width: fit-content;
+}
+
+.air-chat-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    margin-top: 8px;
+}
+
+.air-chat-input {
+    flex: 1;
+    min-height: 40px;
+}

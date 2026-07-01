@@ -37,6 +37,18 @@ class ConfigDialog(QDialog):
 
         layout = QVBoxLayout()
 
+        # Appearance: which theme the review panel uses (applies on the
+        # next card; no restart needed).
+        appearance_group = QGroupBox("Appearance")
+        appearance_layout = QFormLayout()
+        self.theme_select = QComboBox()
+        self.theme_select.addItems(["Native (match Anki)", "Polished"])
+        self.theme_select.setCurrentIndex(
+            1 if self.config.get("theme") == "polished" else 0)
+        appearance_layout.addRow("Theme:", self.theme_select)
+        appearance_group.setLayout(appearance_layout)
+        layout.addWidget(appearance_group)
+
         # Provider selection
         provider_group = QGroupBox("AI Provider")
         provider_layout = QFormLayout()
@@ -126,6 +138,15 @@ class ConfigDialog(QDialog):
         self.subdeck_checkbox = QComboBox()
         self.subdeck_checkbox.addItems(["Disabled", "Enabled"])
 
+        # Which language the note's FIRST field holds. Decks differ ("dog"
+        # first vs "perro" first) and the plugin can't guess: it decides
+        # what the instruction may show and how the LLM prompt is filled.
+        self.front_field = QComboBox()
+        self.front_field.addItems([
+            "Word being learned (target language)",
+            "Meaning / translation (source language)",
+        ])
+
         # User level dropdown
         self.user_level = QComboBox()
         self.user_level.addItems(["Beginner", "Intermediate", "Advanced"])
@@ -136,6 +157,7 @@ class ConfigDialog(QDialog):
 
         lang_layout.addRow("Source Language:", self.source_lang)
         lang_layout.addRow("Target Language:", self.target_lang)
+        lang_layout.addRow("First field holds:", self.front_field)
         lang_layout.addRow("User Level:", self.user_level)
         lang_layout.addRow("Default Review:", self.review_mode)
         lang_layout.addRow("AI Review:", self.enabled_checkbox)
@@ -196,6 +218,8 @@ class ConfigDialog(QDialog):
             self.target_lang.setText(cfg.get("target_language", ""))
             self.enabled_checkbox.setCurrentIndex(1 if cfg.get("enabled", False) else 0)
             self.subdeck_checkbox.setCurrentIndex(1 if cfg.get("include_subdecks", False) else 0)
+            self.front_field.setCurrentIndex(
+                1 if cfg.get("front_field", "target") == "source" else 0)
 
             # Load user level
             level = cfg.get("user_level", "Beginner")
@@ -213,6 +237,7 @@ class ConfigDialog(QDialog):
             self.target_lang.setText("")
             self.enabled_checkbox.setCurrentIndex(0)
             self.subdeck_checkbox.setCurrentIndex(0)
+            self.front_field.setCurrentIndex(0)
             self.user_level.setCurrentIndex(0)
             self.review_mode.setCurrentIndex(0)
 
@@ -248,6 +273,7 @@ class ConfigDialog(QDialog):
         self.config["deck_configs"][deck_name] = {
             "source_language": self.source_lang.text(),
             "target_language": self.target_lang.text(),
+            "front_field": "source" if self.front_field.currentIndex() == 1 else "target",
             "user_level": self.user_level.currentText(),
             "review_mode": self.review_mode.currentText().lower(),
             "enabled": self.enabled_checkbox.currentIndex() == 1,
@@ -263,6 +289,7 @@ class ConfigDialog(QDialog):
 
     def save_and_close(self):
         """Save all settings and close"""
+        self.config["theme"] = "polished" if self.theme_select.currentIndex() == 1 else "native"
         self.config["provider"] = "gemini" if self.provider_select.currentIndex() == 1 else "ollama"
         self.config["ollama"] = {
             "endpoint": self.endpoint_input.text(),

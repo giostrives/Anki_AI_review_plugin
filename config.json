@@ -1,4 +1,5 @@
 {
+  "theme": "native",
   "provider": "ollama",
   "ollama": {
     "endpoint": "http://localhost:11434",

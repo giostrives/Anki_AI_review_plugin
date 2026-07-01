@@ -3,3 +3,6 @@ aqt==25.9.2
 requests
 datapizza-ai
 Jinja2
+
+# dev / testing
+pytest

@@ -1,0 +1,64 @@
+/*
+ * AI Review panel — "polished" theme.
+ *
+ * A restrained slate palette with a single indigo accent, in light and dark
+ * variants. Only overrides the --air-* properties plus a few finishing
+ * touches; all structure lives in ai_review.css. Dark mode keys off Anki's
+ * .night-mode root class, so it follows the app theme live.
+ */
+
+#ai-review-root[data-air-theme="polished"] {
+    --air-fg: #0f172a;
+    --air-fg-subtle: #64748b;
+    --air-surface: #f8fafc;
+    --air-surface-raised: #ffffff;
+    --air-inset: #f8fafc;
+    --air-border: #cbd5e1;
+    --air-border-subtle: #e2e8f0;
+    --air-focus: #4f46e5;
+    --air-accent: #4f46e5;
+    --air-accent-fg: #ffffff;
+    --air-link: #4f46e5;
+    --air-button-bg: #ffffff;
+    --air-radius: 8px;
+    --air-radius-large: 10px;
+    --air-ok: #15803d;
+    --air-warn: #b45309;
+    --air-bad: #b91c1c;
+}
+
+:root.night-mode #ai-review-root[data-air-theme="polished"] {
+    --air-fg: #e2e8f0;
+    --air-fg-subtle: #94a3b8;
+    --air-surface: #0f172a;
+    --air-surface-raised: #1e293b;
+    --air-inset: #0f172a;
+    --air-border: #475569;
+    --air-border-subtle: #334155;
+    --air-focus: #818cf8;
+    --air-accent: #6366f1;
+    --air-accent-fg: #ffffff;
+    --air-link: #a5b4fc;
+    --air-button-bg: #1e293b;
+    --air-ok: #4ade80;
+    --air-warn: #fbbf24;
+    --air-bad: #f87171;
+}
+
+#ai-review-root[data-air-theme="polished"] .air-panel {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+:root.night-mode #ai-review-root[data-air-theme="polished"] .air-panel {
+    box-shadow: none;
+}
+
+#ai-review-root[data-air-theme="polished"] .air-label {
+    text-transform: uppercase;
+    font-size: 12px;
+}
+
+#ai-review-root[data-air-theme="polished"] .air-input:focus,
+#ai-review-root[data-air-theme="polished"] .air-chat-input:focus {
+    border-color: var(--air-accent);
+}
