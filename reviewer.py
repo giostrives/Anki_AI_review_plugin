@@ -16,6 +16,7 @@ from datetime import datetime
 from anki.utils import strip_html
 from aqt import mw, gui_hooks
 from aqt.reviewer import Reviewer
+from aqt.utils import tooltip
 from aqt.webview import WebContent
 
 from . import conversations, providers
@@ -261,12 +262,12 @@ class AIReviewer:
                     lambda c=cleaned: web.eval(f"AIReview.streamFeedback({json.dumps(c)});")
                 )
 
-            return providers.stream_llm(config, system, messages, on_chunk)
+            return providers.stream_llm_with_fallback(config, system, messages, on_chunk)
 
         def on_done(future):
             self.evaluating = False
             try:
-                ai_feedback = future.result()
+                ai_feedback, provider_used = future.result()
             except Exception as e:
                 conversations.append_error(config, f"Evaluation failed: {e}")
                 # Return to the edit/send state with the error shown on top so
@@ -275,6 +276,12 @@ class AIReviewer:
                 web.eval(f"AIReview.evalError({json.dumps(str(e))});")
                 return
 
+            # Informational only: the review already succeeded, the user may
+            # just want to know their primary provider needed a stand-in.
+            if provider_used != config.get("provider", "ollama"):
+                tooltip(f"Primary AI provider failed — answered by {provider_used}",
+                        period=4000)
+
             # Never surface the model's chain-of-thought.
             ai_feedback = self._strip_think(ai_feedback)
 
@@ -282,7 +289,8 @@ class AIReviewer:
             # the evaluation prompt — so follow-ups are a normal conversation (no
             # scores, XML, or <think>), not another review. Only the follow-up
             # turns are sent; the card context lives in chat_system.
-            self.conv_meta = self._build_conv_meta(config, card_data, answer, mode)
+            self.conv_meta = self._build_conv_meta(config, card_data, answer, mode,
+                                                   provider_used)
             self.first_feedback = ai_feedback
             self.chat_system = conversation_prompt.render(
                 user_proficiency=self.deck_config.get("user_level", "Beginner").lower(),
@@ -333,11 +341,12 @@ class AIReviewer:
                     lambda c=cleaned: web.eval(f"AIReview.chatStream({json.dumps(c)});")
                 )
 
-            return providers.stream_llm(config, self.chat_system, self.chat_messages, on_chunk)
+            return providers.stream_llm_with_fallback(
+                config, self.chat_system, self.chat_messages, on_chunk)
 
         def on_done(future):
             try:
-                reply = future.result()
+                reply, provider_used = future.result()
             except Exception as e:
                 conversations.append_error(config, f"Chat failed: {e}")
                 # Drop the failed turn so a retry doesn't duplicate it.
@@ -345,16 +354,23 @@ class AIReviewer:
                 web.eval(f"AIReview.chatError({json.dumps(str(e))});")
                 return
 
+            if provider_used != config.get("provider", "ollama"):
+                tooltip(f"Primary AI provider failed — answered by {provider_used}",
+                        period=4000)
+
             reply = self._strip_think(reply)
             self.chat_messages.append({"role": "assistant", "content": reply})
             web.eval(f"AIReview.chatEnd({json.dumps(reply)});")
 
         mw.taskman.run_in_background(task, on_done)
 
-    def _build_conv_meta(self, config, card_data, answer, mode):
-        provider = config.get("provider", "ollama")
+    def _build_conv_meta(self, config, card_data, answer, mode, provider_used=None):
+        # Log the provider that actually answered (may be a fallback).
+        provider = provider_used or config.get("provider", "ollama")
         if provider == "gemini":
             model = config.get("gemini", {}).get("model", "")
+        elif provider == "nvidia":
+            model = config.get("nvidia", {}).get("model", "deepseek-ai/deepseek-v4-flash")
         else:
             model = config.get("ollama", {}).get("model") or config.get("model", "gemma3")
         return {

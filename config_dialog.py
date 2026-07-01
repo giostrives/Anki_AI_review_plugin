@@ -7,10 +7,15 @@ import os
 from aqt import mw
 from aqt.qt import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                     QLineEdit, QPushButton, QListWidget, QGroupBox,
-                    QFormLayout, QComboBox, QFileDialog, Qt)
+                    QFormLayout, QComboBox, QFileDialog, QTabWidget,
+                    QWidget, Qt)
 from aqt.utils import showInfo, tooltip
 
 from . import providers
+
+# Dropdown order for the provider combo boxes; index <-> config name.
+_PROVIDERS = ["ollama", "gemini", "nvidia"]
+_PROVIDER_LABELS = ["Ollama", "Gemini", "NVIDIA"]
 
 
 def get_config():
@@ -37,26 +42,50 @@ class ConfigDialog(QDialog):
 
         layout = QVBoxLayout()
 
-        # Appearance: which theme the review panel uses (applies on the
-        # next card; no restart needed).
-        appearance_group = QGroupBox("Appearance")
-        appearance_layout = QFormLayout()
-        self.theme_select = QComboBox()
-        self.theme_select.addItems(["Native (match Anki)", "Polished"])
-        self.theme_select.setCurrentIndex(
-            1 if self.config.get("theme") == "polished" else 0)
-        appearance_layout.addRow("Theme:", self.theme_select)
-        appearance_group.setLayout(appearance_layout)
-        layout.addWidget(appearance_group)
+        # Two screens: everything about models/APIs on one, decks and
+        # general add-on settings on the other. The same provider (and
+        # fallback chain) is used everywhere, so it is configured once.
+        tabs = QTabWidget()
+        tabs.addTab(self._build_provider_tab(), "AI Providers")
+        tabs.addTab(self._build_general_tab(), "Decks && General")
+        layout.addWidget(tabs)
+
+        # Save and close
+        btn_layout = QHBoxLayout()
+        save_btn = QPushButton("Save All")
+        save_btn.clicked.connect(self.save_and_close)
+        close_btn = QPushButton("Cancel")
+        close_btn.clicked.connect(self.reject)
+
+        btn_layout.addWidget(save_btn)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+
+    def _build_provider_tab(self):
+        """Provider choice, fallback, and per-provider connection settings."""
+        tab = QWidget()
+        layout = QVBoxLayout()
 
         # Provider selection
         provider_group = QGroupBox("AI Provider")
         provider_layout = QFormLayout()
         self.provider_select = QComboBox()
-        self.provider_select.addItems(["Ollama", "Gemini"])
+        self.provider_select.addItems(_PROVIDER_LABELS)
         provider = self.config.get("provider", "ollama")
-        self.provider_select.setCurrentIndex(1 if provider == "gemini" else 0)
+        self.provider_select.setCurrentIndex(
+            _PROVIDERS.index(provider) if provider in _PROVIDERS else 0)
         provider_layout.addRow("Use:", self.provider_select)
+
+        # Fallback: when the primary provider errors, try the others (ones
+        # without an API key are skipped automatically).
+        self.fallback_select = QComboBox()
+        self.fallback_select.addItems(["Nothing (no fallback)", "All other providers"])
+        self.fallback_select.setCurrentIndex(
+            1 if self.config.get("fallback_providers") else 0)
+        provider_layout.addRow("If it fails, try:", self.fallback_select)
+
         provider_group.setLayout(provider_layout)
         layout.addWidget(provider_group)
 
@@ -92,6 +121,48 @@ class ConfigDialog(QDialog):
         gemini_layout.addRow(QLabel("Stored in the add-on's .env; removed when you uninstall the add-on."))
         gemini_group.setLayout(gemini_layout)
         layout.addWidget(gemini_group)
+
+        # NVIDIA settings
+        nvidia_cfg = self.config.get("nvidia", {})
+        nvidia_group = QGroupBox("NVIDIA Settings")
+        nvidia_layout = QFormLayout()
+        self.nvidia_model_input = QLineEdit(
+            nvidia_cfg.get("model", "deepseek-ai/deepseek-v4-flash"))
+        nvidia_layout.addRow("Model:", self.nvidia_model_input)
+
+        self.nvidia_key_input = QLineEdit(providers.nvidia_api_key())
+        self.nvidia_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.nvidia_key_input.setPlaceholderText("Paste your NVIDIA API key")
+        nvidia_layout.addRow("API Key:", self.nvidia_key_input)
+
+        delete_nvidia_key_btn = QPushButton("Delete API Key")
+        delete_nvidia_key_btn.clicked.connect(self.delete_nvidia_key)
+        nvidia_layout.addRow("", delete_nvidia_key_btn)
+
+        nvidia_layout.addRow(QLabel("Stored in the add-on's .env; removed when you uninstall the add-on."))
+        nvidia_group.setLayout(nvidia_layout)
+        layout.addWidget(nvidia_group)
+
+        layout.addStretch()
+        tab.setLayout(layout)
+        return tab
+
+    def _build_general_tab(self):
+        """Appearance, logging, and per-deck configuration."""
+        tab = QWidget()
+        layout = QVBoxLayout()
+
+        # Appearance: which theme the review panel uses (applies on the
+        # next card; no restart needed).
+        appearance_group = QGroupBox("Appearance")
+        appearance_layout = QFormLayout()
+        self.theme_select = QComboBox()
+        self.theme_select.addItems(["Native (match Anki)", "Polished"])
+        self.theme_select.setCurrentIndex(
+            1 if self.config.get("theme") == "polished" else 0)
+        appearance_layout.addRow("Theme:", self.theme_select)
+        appearance_group.setLayout(appearance_layout)
+        layout.addWidget(appearance_group)
 
         # Logging settings (off by default; saves conversations + errors to a folder)
         logging_group = QGroupBox("Logging")
@@ -172,18 +243,8 @@ class ConfigDialog(QDialog):
         deck_group.setLayout(deck_layout)
         layout.addWidget(deck_group)
 
-        # Save and close
-        btn_layout = QHBoxLayout()
-        save_btn = QPushButton("Save All")
-        save_btn.clicked.connect(self.save_and_close)
-        close_btn = QPushButton("Cancel")
-        close_btn.clicked.connect(self.reject)
-
-        btn_layout.addWidget(save_btn)
-        btn_layout.addWidget(close_btn)
-        layout.addLayout(btn_layout)
-
-        self.setLayout(layout)
+        tab.setLayout(layout)
+        return tab
 
     def load_decks(self):
         """Load decks into the list, collapsing subdecks already covered by a parent.
@@ -254,6 +315,12 @@ class ConfigDialog(QDialog):
         self.gemini_key_input.setText("")
         tooltip("Gemini API key deleted")
 
+    def delete_nvidia_key(self):
+        """Clear the stored NVIDIA API key from .env and the input field"""
+        providers.delete_nvidia_api_key()
+        self.nvidia_key_input.setText("")
+        tooltip("NVIDIA API key deleted")
+
     def save_deck_config(self):
         """Save configuration for currently selected deck"""
         current_item = self.deck_list.currentItem()
@@ -290,7 +357,13 @@ class ConfigDialog(QDialog):
     def save_and_close(self):
         """Save all settings and close"""
         self.config["theme"] = "polished" if self.theme_select.currentIndex() == 1 else "native"
-        self.config["provider"] = "gemini" if self.provider_select.currentIndex() == 1 else "ollama"
+        primary = _PROVIDERS[self.provider_select.currentIndex()]
+        self.config["provider"] = primary
+        # "All other providers" stores the concrete names so the runtime chain
+        # (and a hand-edited order) stays a plain list in the config.
+        self.config["fallback_providers"] = (
+            [p for p in _PROVIDERS if p != primary]
+            if self.fallback_select.currentIndex() == 1 else [])
         self.config["ollama"] = {
             "endpoint": self.endpoint_input.text(),
             "model": self.model_input.text(),
@@ -298,10 +371,14 @@ class ConfigDialog(QDialog):
         self.config["gemini"] = {
             "model": self.gemini_model_input.text(),
         }
+        self.config["nvidia"] = {
+            "model": self.nvidia_model_input.text(),
+        }
         self.config["logging_enabled"] = self.logging_enabled.currentIndex() == 1
         self.config["conversations_dir"] = self.log_dir_input.text().strip()
-        # The API key is stored in .env (removed on uninstall), never in the config.
+        # API keys are stored in .env (removed on uninstall), never in the config.
         providers.set_gemini_api_key(self.gemini_key_input.text().strip())
+        providers.set_nvidia_api_key(self.nvidia_key_input.text().strip())
         # Drop the obsolete flat keys if present.
         self.config.pop("ollama_endpoint", None)
         self.config.pop("model", None)

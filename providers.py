@@ -1,13 +1,18 @@
 """
 LLM provider abstraction.
 
-Supports two backends, selected by config["provider"]:
+Supports three backends, selected by config["provider"]:
   - "ollama": local Ollama server via its /api/chat HTTP endpoint.
   - "gemini": Google Gemini via its REST v1beta generateContent endpoint.
+  - "nvidia": NVIDIA API Catalog via its OpenAI-compatible chat/completions
+    endpoint.
 
-Both backends talk plain HTTP through `requests` (which Anki bundles), so the
-add-on needs no extra Python packages. The Gemini API key is read from the
+All backends talk plain HTTP through `requests` (which Anki bundles), so the
+add-on needs no extra Python packages. Cloud API keys are read from the
 add-on's `.env` file (git-ignored).
+
+Optional fallback: config["fallback_providers"] lists providers to try, in
+order, when the primary one fails (see `stream_llm_with_fallback`).
 """
 import json
 import os
@@ -38,13 +43,13 @@ def load_env():
     return env
 
 
-def gemini_api_key():
-    """Return the Gemini API key from `.env` (or env var), or empty string."""
-    return load_env().get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
+def _get_api_key(name):
+    """Return the named API key from `.env` (or env var), or empty string."""
+    return load_env().get(name) or os.environ.get(name, "")
 
 
-def set_gemini_api_key(key):
-    """Write GEMINI_API_KEY into the add-on's `.env`, preserving other lines.
+def _set_api_key(name, key):
+    """Write the named key into the add-on's `.env`, preserving other lines.
 
     Pass an empty string to clear the key. The `.env` file lives inside the
     add-on folder, so it is removed automatically when the add-on is uninstalled.
@@ -57,22 +62,45 @@ def set_gemini_api_key(key):
             for raw in f:
                 stripped = raw.strip()
                 if (not stripped.startswith("#")
-                        and stripped.split("=", 1)[0].strip() == "GEMINI_API_KEY"):
-                    lines.append(f"GEMINI_API_KEY={key}\n")
+                        and stripped.split("=", 1)[0].strip() == name):
+                    lines.append(f"{name}={key}\n")
                     found = True
                 else:
                     lines.append(raw if raw.endswith("\n") else raw + "\n")
     except FileNotFoundError:
         pass
     if not found:
-        lines.append(f"GEMINI_API_KEY={key}\n")
+        lines.append(f"{name}={key}\n")
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(lines)
+
+
+def gemini_api_key():
+    """Return the Gemini API key from `.env` (or env var), or empty string."""
+    return _get_api_key("GEMINI_API_KEY")
+
+
+def set_gemini_api_key(key):
+    return _set_api_key("GEMINI_API_KEY", key)
 
 
 def delete_gemini_api_key():
     """Remove the stored Gemini API key (clears it in `.env`)."""
     set_gemini_api_key("")
+
+
+def nvidia_api_key():
+    """Return the NVIDIA API key from `.env` (or env var), or empty string."""
+    return _get_api_key("NVIDIA_API_KEY")
+
+
+def set_nvidia_api_key(key):
+    return _set_api_key("NVIDIA_API_KEY", key)
+
+
+def delete_nvidia_api_key():
+    """Remove the stored NVIDIA API key (clears it in `.env`)."""
+    set_nvidia_api_key("")
 
 
 def chat_llm(config, system, messages):
@@ -89,6 +117,8 @@ def chat_llm(config, system, messages):
     provider = config.get("provider", "ollama")
     if provider == "gemini":
         return _chat_gemini(config, system, messages)
+    if provider == "nvidia":
+        return _chat_nvidia(config, system, messages)
     return _chat_ollama(config, system, messages)
 
 
@@ -108,7 +138,91 @@ def stream_llm(config, system, messages, on_chunk):
     provider = config.get("provider", "ollama")
     if provider == "gemini":
         return _stream_gemini(config, system, messages, on_chunk)
+    if provider == "nvidia":
+        return _stream_nvidia(config, system, messages, on_chunk)
     return _stream_ollama(config, system, messages, on_chunk)
+
+
+def _provider_chain(config):
+    """Ordered provider names to try: the primary, then configured fallbacks.
+
+    Unknown names and duplicates are dropped, so a hand-edited config can't
+    break the chain.
+    """
+    known = ("ollama", "gemini", "nvidia")
+    chain = [config.get("provider", "ollama")]
+    for name in config.get("fallback_providers", []):
+        if name in known and name not in chain:
+            chain.append(name)
+    return chain
+
+
+def _is_configured(name):
+    """Whether a provider is worth trying at all (cloud ones need a key).
+
+    Ollama always qualifies: it needs no key, and an unreachable server is a
+    runtime failure the chain already handles by moving on.
+    """
+    if name == "gemini":
+        return bool(gemini_api_key())
+    if name == "nvidia":
+        return bool(nvidia_api_key())
+    return True
+
+
+def chat_llm_with_fallback(config, system, messages):
+    """Like `chat_llm`, but on failure tries the configured fallback providers
+    in order. Returns (reply, provider_used) so the caller can tell the user
+    when someone other than the primary answered.
+    """
+    return _run_with_fallback(
+        config,
+        lambda cfg: chat_llm(cfg, system, messages),
+    )
+
+
+def stream_llm_with_fallback(config, system, messages, on_chunk):
+    """Like `stream_llm`, but with the fallback chain. Returns
+    (reply, provider_used).
+
+    A provider that fails AFTER streaming chunks is not fallen back on: the
+    caller has already shown that text, and a second provider would replay it.
+    In practice almost every failure (missing key, connection refused, 4xx)
+    happens before the first chunk.
+    """
+    emitted = [False]
+
+    def counting_chunk(delta):
+        emitted[0] = True
+        on_chunk(delta)
+
+    def call(cfg):
+        emitted[0] = False
+        return stream_llm(cfg, system, messages, counting_chunk)
+
+    return _run_with_fallback(config, call, midstream=emitted)
+
+
+def _run_with_fallback(config, call, midstream=None):
+    """Try `call` once per provider in the chain; return (result, name)."""
+    chain = _provider_chain(config)
+    if len(chain) == 1:
+        # No fallbacks configured: behave exactly like the single-provider
+        # path, including its error messages.
+        return call(config), chain[0]
+    failures = []
+    for name in chain:
+        if not _is_configured(name):
+            failures.append(f"{name}: no API key configured")
+            continue
+        try:
+            return call({**config, "provider": name}), name
+        except Exception as e:
+            if midstream is not None and midstream[0]:
+                # Partial output already reached the UI; don't replay it.
+                raise
+            failures.append(f"{name}: {e}")
+    raise RuntimeError("All providers failed:\n" + "\n".join(failures))
 
 
 def _chat_ollama(config, system, messages):
@@ -298,4 +412,104 @@ def _stream_gemini(config, system, messages, on_chunk):
         raise RuntimeError("Could not reach the Gemini API. Check your internet connection.")
     if not parts:
         raise RuntimeError("Gemini returned no usable text.")
+    return "".join(parts)
+
+
+NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+
+
+def _nvidia_request_parts(config, system, messages, stream):
+    """Shared auth check + OpenAI-style request body for the NVIDIA API."""
+    api_key = nvidia_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "No NVIDIA API key found. Set it in the AI Reviewer settings "
+            "(or add NVIDIA_API_KEY to the add-on's .env file)."
+        )
+
+    model = config.get("nvidia", {}).get("model", "deepseek-ai/deepseek-v4-flash")
+
+    chat_messages = []
+    if system:
+        chat_messages.append({"role": "system", "content": system})
+    chat_messages.extend(messages)
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    body = {
+        "model": model,
+        "messages": chat_messages,
+        "temperature": 1,
+        "top_p": 0.95,
+        "max_tokens": 16384,
+        # Ask DeepSeek-style models to skip chain-of-thought output.
+        "chat_template_kwargs": {"thinking": False},
+        "stream": stream,
+    }
+    return headers, body
+
+
+def _nvidia_error(response):
+    try:
+        detail = response.json().get("error", {}).get("message", "")
+    except Exception:
+        detail = response.text[:200]
+    return RuntimeError(f"NVIDIA API error ({response.status_code}): {detail}")
+
+
+def _chat_nvidia(config, system, messages):
+    headers, body = _nvidia_request_parts(config, system, messages, stream=False)
+
+    try:
+        response = requests.post(NVIDIA_URL, headers=headers, json=body, timeout=120)
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError("Could not reach the NVIDIA API. Check your internet connection.")
+
+    if response.status_code != 200:
+        raise _nvidia_error(response)
+
+    data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError(f"NVIDIA returned no usable text. Response: {str(data)[:200]}")
+
+
+def _stream_nvidia(config, system, messages, on_chunk):
+    headers, body = _nvidia_request_parts(config, system, messages, stream=True)
+
+    parts = []
+    try:
+        with requests.post(
+            NVIDIA_URL,
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=120,
+        ) as response:
+            if response.status_code != 200:
+                raise _nvidia_error(response)
+            for raw in response.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                if not line.startswith("data:"):
+                    continue
+                payload = line[len("data:"):].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    obj = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                try:
+                    delta = obj["choices"][0].get("delta", {}).get("content", "")
+                except (KeyError, IndexError, TypeError):
+                    continue
+                if delta:
+                    parts.append(delta)
+                    on_chunk(delta)
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError("Could not reach the NVIDIA API. Check your internet connection.")
+    if not parts:
+        raise RuntimeError("NVIDIA returned no usable text.")
     return "".join(parts)

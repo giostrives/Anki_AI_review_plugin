@@ -11,6 +11,7 @@ def env_in_tmp(providers_mod, tmp_path, monkeypatch):
     env var out of the way."""
     monkeypatch.setattr(providers_mod, "_addon_dir", str(tmp_path))
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     return tmp_path
 
 
@@ -45,6 +46,21 @@ class TestEnvFile:
         monkeypatch.setenv("GEMINI_API_KEY", "from-env")
         assert providers_mod.gemini_api_key() == "from-env"
 
+    def test_nvidia_key_roundtrip(self, providers_mod, env_in_tmp):
+        providers_mod.set_nvidia_api_key("nv-123")
+        assert providers_mod.nvidia_api_key() == "nv-123"
+        providers_mod.delete_nvidia_api_key()
+        assert providers_mod.nvidia_api_key() == ""
+
+    def test_keys_coexist_in_one_env_file(self, providers_mod, env_in_tmp):
+        providers_mod.set_gemini_api_key("gm")
+        providers_mod.set_nvidia_api_key("nv")
+        assert providers_mod.gemini_api_key() == "gm"
+        assert providers_mod.nvidia_api_key() == "nv"
+        # Rewriting one key must not clobber the other.
+        providers_mod.set_gemini_api_key("gm2")
+        assert providers_mod.nvidia_api_key() == "nv"
+
 
 class TestDispatch:
     def test_chat_routes_by_provider(self, providers_mod, monkeypatch):
@@ -53,10 +69,13 @@ class TestDispatch:
                             lambda *a: calls.append("ollama"))
         monkeypatch.setattr(providers_mod, "_chat_gemini",
                             lambda *a: calls.append("gemini"))
+        monkeypatch.setattr(providers_mod, "_chat_nvidia",
+                            lambda *a: calls.append("nvidia"))
         providers_mod.chat_llm({"provider": "gemini"}, "sys", [])
         providers_mod.chat_llm({"provider": "ollama"}, "sys", [])
+        providers_mod.chat_llm({"provider": "nvidia"}, "sys", [])
         providers_mod.chat_llm({}, "sys", [])  # default is ollama
-        assert calls == ["gemini", "ollama", "ollama"]
+        assert calls == ["gemini", "ollama", "nvidia", "ollama"]
 
     def test_stream_routes_by_provider(self, providers_mod, monkeypatch):
         calls = []
@@ -64,13 +83,20 @@ class TestDispatch:
                             lambda *a: calls.append("ollama"))
         monkeypatch.setattr(providers_mod, "_stream_gemini",
                             lambda *a: calls.append("gemini"))
+        monkeypatch.setattr(providers_mod, "_stream_nvidia",
+                            lambda *a: calls.append("nvidia"))
         providers_mod.stream_llm({"provider": "gemini"}, "s", [], None)
+        providers_mod.stream_llm({"provider": "nvidia"}, "s", [], None)
         providers_mod.stream_llm({}, "s", [], None)
-        assert calls == ["gemini", "ollama"]
+        assert calls == ["gemini", "nvidia", "ollama"]
 
     def test_gemini_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No Gemini API key"):
             providers_mod._chat_gemini({}, "sys", [])
+
+    def test_nvidia_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
+        with pytest.raises(RuntimeError, match="No NVIDIA API key"):
+            providers_mod._chat_nvidia({}, "sys", [])
 
 
 class FakeResponse:
@@ -169,3 +195,183 @@ class TestStreamParsing:
                             lambda *a, **kw: FakeResponse(200, lines=[]))
         with pytest.raises(RuntimeError, match="no usable text"):
             providers_mod._stream_gemini({}, None, [], lambda d: None)
+
+
+class TestNvidiaRequest:
+    def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_nvidia_api_key("nv-k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(url=url, headers=headers, body=json)
+            return FakeResponse(200, {
+                "choices": [{"message": {"role": "assistant", "content": "ok!"}}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        reply = providers_mod._chat_nvidia(
+            {}, "be nice", [{"role": "user", "content": "hola"}])
+        assert reply == "ok!"
+        assert captured["url"] == "https://integrate.api.nvidia.com/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer nv-k"
+        body = captured["body"]
+        assert body["model"] == "deepseek-ai/deepseek-v4-flash"  # default
+        assert body["temperature"] == 1
+        assert body["top_p"] == 0.95
+        assert body["max_tokens"] == 16384
+        assert body["chat_template_kwargs"] == {"thinking": False}
+        assert body["stream"] is False
+        # System prompt travels as a leading OpenAI-style system message.
+        assert body["messages"][0] == {"role": "system", "content": "be nice"}
+        assert body["messages"][1]["content"] == "hola"
+
+    def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_nvidia_api_key("k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(body=json)
+            return FakeResponse(200, {"choices": [{"message": {"content": "x"}}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        providers_mod._chat_nvidia(
+            {"nvidia": {"model": "meta/llama-4"}}, None, [])
+        assert captured["body"]["model"] == "meta/llama-4"
+
+    def test_api_error_surfaces_message(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_nvidia_api_key("k")
+        monkeypatch.setattr(
+            providers_mod.requests, "post",
+            lambda *a, **kw: FakeResponse(402, {"error": {"message": "out of credits"}}))
+        with pytest.raises(RuntimeError, match=r"402.*out of credits"):
+            providers_mod._chat_nvidia({}, None, [])
+
+    def test_malformed_body_raises(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_nvidia_api_key("k")
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, {"choices": []}))
+        with pytest.raises(RuntimeError, match="no usable text"):
+            providers_mod._chat_nvidia({}, None, [])
+
+    def test_sse_stream(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_nvidia_api_key("k")
+
+        def sse(delta):
+            return ("data: " + json.dumps({"choices": [{"delta": delta}]})).encode()
+
+        lines = [
+            sse({"role": "assistant"}),  # role-only first event, no content
+            sse({"content": "Ho"}),
+            b": comment",
+            sse({"content": "la"}),
+            b"data: [DONE]",
+        ]
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, lines=lines))
+        chunks = []
+        reply = providers_mod._stream_nvidia({}, None, [], chunks.append)
+        assert reply == "Hola"
+        assert chunks == ["Ho", "la"]
+
+    def test_empty_stream_raises(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_nvidia_api_key("k")
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, lines=[b"data: [DONE]"]))
+        with pytest.raises(RuntimeError, match="no usable text"):
+            providers_mod._stream_nvidia({}, None, [], lambda d: None)
+
+
+class TestFallback:
+    def test_chain_is_primary_plus_fallbacks_deduped(self, providers_mod):
+        cfg = {"provider": "gemini",
+               "fallback_providers": ["gemini", "bogus", "ollama", "nvidia", "ollama"]}
+        assert providers_mod._provider_chain(cfg) == ["gemini", "ollama", "nvidia"]
+
+    def test_chain_without_fallbacks_is_primary_only(self, providers_mod):
+        assert providers_mod._provider_chain({}) == ["ollama"]
+
+    def test_no_fallback_passes_error_through_verbatim(self, providers_mod, monkeypatch):
+        def boom(*a):
+            raise RuntimeError("original ollama error")
+        monkeypatch.setattr(providers_mod, "_chat_ollama", boom)
+        with pytest.raises(RuntimeError, match="^original ollama error$"):
+            providers_mod.chat_llm_with_fallback({}, "s", [])
+
+    def test_falls_back_to_next_provider(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_gemini_api_key("k")
+
+        def boom(*a):
+            raise RuntimeError("gemini down")
+        monkeypatch.setattr(providers_mod, "_chat_gemini", boom)
+        monkeypatch.setattr(providers_mod, "_chat_ollama", lambda *a: "saved!")
+        cfg = {"provider": "gemini", "fallback_providers": ["ollama"]}
+        assert providers_mod.chat_llm_with_fallback(cfg, "s", []) == ("saved!", "ollama")
+
+    def test_primary_success_reports_primary(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_gemini_api_key("k")
+        monkeypatch.setattr(providers_mod, "_chat_gemini", lambda *a: "hi")
+        cfg = {"provider": "gemini", "fallback_providers": ["ollama"]}
+        assert providers_mod.chat_llm_with_fallback(cfg, "s", []) == ("hi", "gemini")
+
+    def test_unconfigured_provider_is_skipped(self, providers_mod, env_in_tmp, monkeypatch):
+        # No NVIDIA key set: its backend must not even be called.
+        def never(*a):
+            raise AssertionError("nvidia backend called without a key")
+        monkeypatch.setattr(providers_mod, "_chat_nvidia", never)
+
+        def boom(*a):
+            raise RuntimeError("ollama down")
+        monkeypatch.setattr(providers_mod, "_chat_ollama", boom)
+        providers_mod.set_gemini_api_key("k")
+        monkeypatch.setattr(providers_mod, "_chat_gemini", lambda *a: "hi")
+        cfg = {"provider": "ollama", "fallback_providers": ["nvidia", "gemini"]}
+        assert providers_mod.chat_llm_with_fallback(cfg, "s", []) == ("hi", "gemini")
+
+    def test_all_fail_aggregates_errors(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_gemini_api_key("k")
+
+        def boom(msg):
+            def f(*a):
+                raise RuntimeError(msg)
+            return f
+        monkeypatch.setattr(providers_mod, "_chat_ollama", boom("no server"))
+        monkeypatch.setattr(providers_mod, "_chat_gemini", boom("quota"))
+        cfg = {"provider": "ollama", "fallback_providers": ["gemini", "nvidia"]}
+        with pytest.raises(RuntimeError) as exc:
+            providers_mod.chat_llm_with_fallback(cfg, "s", [])
+        text = str(exc.value)
+        assert "All providers failed" in text
+        assert "ollama: no server" in text
+        assert "gemini: quota" in text
+        assert "nvidia: no API key configured" in text
+
+    def test_stream_falls_back_when_nothing_streamed(self, providers_mod, monkeypatch):
+        def boom(*a):
+            raise RuntimeError("dead before first byte")
+        monkeypatch.setattr(providers_mod, "_stream_ollama", boom)
+
+        def ok(config, system, messages, on_chunk):
+            on_chunk("Ho")
+            on_chunk("la")
+            return "Hola"
+        monkeypatch.setattr(providers_mod, "_stream_gemini", ok)
+        monkeypatch.setattr(providers_mod, "gemini_api_key", lambda: "k")
+        cfg = {"provider": "ollama", "fallback_providers": ["gemini"]}
+        chunks = []
+        result = providers_mod.stream_llm_with_fallback(cfg, "s", [], chunks.append)
+        assert result == ("Hola", "gemini")
+        assert chunks == ["Ho", "la"]
+
+    def test_stream_midstream_failure_does_not_fall_back(self, providers_mod, monkeypatch):
+        # The user already saw partial text: falling back would replay it.
+        def half_then_die(config, system, messages, on_chunk):
+            on_chunk("partial ")
+            raise RuntimeError("connection reset")
+        monkeypatch.setattr(providers_mod, "_stream_ollama", half_then_die)
+
+        def never(*a):
+            raise AssertionError("fallback must not run after mid-stream output")
+        monkeypatch.setattr(providers_mod, "_stream_gemini", never)
+        monkeypatch.setattr(providers_mod, "gemini_api_key", lambda: "k")
+        cfg = {"provider": "ollama", "fallback_providers": ["gemini"]}
+        with pytest.raises(RuntimeError, match="connection reset"):
+            providers_mod.stream_llm_with_fallback(cfg, "s", [], lambda d: None)
