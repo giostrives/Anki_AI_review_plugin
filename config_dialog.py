@@ -97,7 +97,7 @@ class ConfigDialog(QDialog):
             ollama_cfg.get("endpoint") or self.config.get("ollama_endpoint", "http://localhost:11434"))
         ollama_layout.addRow("Endpoint:", self.endpoint_input)
         self.model_input = QLineEdit(
-            ollama_cfg.get("model") or self.config.get("model", "gemma3"))
+            ollama_cfg.get("model") or self.config.get("model", "gemma4"))
         ollama_layout.addRow("Model:", self.model_input)
         ollama_group.setLayout(ollama_layout)
         layout.addWidget(ollama_group)

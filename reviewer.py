@@ -372,7 +372,7 @@ class AIReviewer:
         elif provider == "nvidia":
             model = config.get("nvidia", {}).get("model", "deepseek-ai/deepseek-v4-flash")
         else:
-            model = config.get("ollama", {}).get("model") or config.get("model", "gemma3")
+            model = config.get("ollama", {}).get("model") or config.get("model", "gemma4")
         return {
             "id": uuid.uuid4().hex,
             "created": datetime.now().isoformat(timespec="seconds"),

@@ -229,7 +229,7 @@ def _chat_ollama(config, system, messages):
     # Backward compatible: fall back to the old flat config keys.
     ollama = config.get("ollama", {})
     endpoint = ollama.get("endpoint") or config.get("ollama_endpoint", "http://localhost:11434")
-    model = ollama.get("model") or config.get("model", "gemma3")
+    model = ollama.get("model") or config.get("model", "gemma4")
 
     chat_messages = []
     if system:
@@ -309,7 +309,7 @@ def _chat_gemini(config, system, messages):
 def _stream_ollama(config, system, messages, on_chunk):
     ollama = config.get("ollama", {})
     endpoint = ollama.get("endpoint") or config.get("ollama_endpoint", "http://localhost:11434")
-    model = ollama.get("model") or config.get("model", "gemma3")
+    model = ollama.get("model") or config.get("model", "gemma4")
 
     chat_messages = []
     if system:
