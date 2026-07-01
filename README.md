@@ -2,61 +2,113 @@
 
 An Anki add-on that turns passive flashcard reviews into active practice. For decks you
 opt in, instead of just flipping a card you're asked to **use the word in a sentence** (or
-translate it), and a Large Language Model evaluates your answer and gives feedback before
-you grade the card.
-
-It's an experiment in using LLMs as a lightweight language tutor inside your normal review
-flow.
+translate it), and a language model checks your answer and gives feedback before you grade
+the card.
 
 ## What it does
 
-- **Intercepts reviews** for decks you enable. The card's first field is the prompt word;
-  you write a sentence using it in the deck's target language (or translate it).
+- **Intercepts reviews** for decks you enable. The card renders exactly as Anki normally
+  shows it (your template, styling, images), with the AI panel underneath.
 - **Two review styles**, switchable per card:
-  - **Full review** — a detailed evaluation: a star score, grammar corrections, fluency
-    notes, and an example sentence.
-  - **Quick review** — a fast pass/fail that just checks whether you used the word / gave
-    the correct translation, with one line of feedback.
-- **Follow-up chat** — after the feedback you can keep the conversation going ("so *el sol
-  es caliente* but *el pan está caliente*, right?") for as many turns as you like, with
-  either backend.
-- **Per-deck configuration** — each deck has its own source/target language pair, user
-  level, and default review style.
-- **Two AI backends** — run locally with **Ollama**, or use **Google Gemini**.
-- **Conversation log** — every review (and its follow-ups) is saved to a per-session file,
-  for your own history/analysis.
-- **Native look** — the card renders exactly as Anki would show it (your card template,
-  styling, and images), with the AI panel beneath it. Two themes:
-  - **Native (default)** — built entirely on Anki's own theme variables, so it matches
-    whatever Anki theme you use, light or dark, and follows night-mode switches live.
-  - **Polished** — a custom slate-and-indigo design with its own light and dark variants.
-- Grading stays 100% native: after the feedback the card flips and you use Anki's normal
+  - **Full review** — a star score, grammar corrections, fluency notes, and an example
+    sentence.
+  - **Quick review** — a fast pass/fail with one line of feedback.
+- **Follow-up chat** — after the feedback you can ask questions about the card for as many
+  turns as you like.
+- **Per-deck configuration** — each deck has its own language pair, user level, and
+  default review style. Decks you don't enable behave like normal Anki cards.
+- **Three AI providers** — a local **Ollama** server, **Google Gemini**, or the
+  **NVIDIA API catalog**. Optionally, if your chosen provider fails (server down, quota
+  exceeded), the add-on can fall back to the others and tell you it did so.
+- Grading stays native: after the feedback the card flips and you use Anki's normal
   Again/Hard/Good/Easy buttons.
 
-## Requirements
+## What you need
 
-- **Anki 2.1.55 or newer** (the add-on's Native theme uses Anki's built-in CSS theme
-  variables, introduced in 2.1.55). Developed and tested against **Anki / aqt 25.9.x**
-  (the versions pinned in `requirements.txt`).
-- **Python 3.11** for the local dev setup (see below).
-- An AI backend — **one** of:
-  - **Ollama** (recommended to start): a local LLM server. No API key, nothing leaves your
-    machine. Install from [ollama.com](https://ollama.com), then pull a model, e.g.
-    `ollama pull gemma3`.
-  - **Google Gemini**: just a `GEMINI_API_KEY`
-    (free key from [Google AI Studio](https://aistudio.google.com/apikey)). No extra Python
-    package needed — the add-on calls Gemini's REST API over `requests`, which Anki bundles.
+- **Anki 2.1.55 or newer** (tested against Anki 25.9.x).
+- **One AI provider:**
+  - **Ollama** — a local LLM server. No API key, no account, nothing leaves your machine.
+    Install from [ollama.com](https://ollama.com) and pull a model
+    (e.g. `ollama pull gemma4`).
+  - **Google Gemini** — needs an API key from
+    [Google AI Studio](https://aistudio.google.com/apikey).
+  - **NVIDIA API catalog** — needs an API key from
+    [build.nvidia.com](https://build.nvidia.com); serves open models such as DeepSeek.
 
-Python dependencies are listed in `requirements.txt`: `anki`, `aqt`, `requests`, and
-`Jinja2`. Both AI backends (Ollama and Gemini) talk plain HTTP, so there's nothing else to
-install.
+  Both cloud providers have a free tier, which is generally enough for personal review
+  sessions. No extra Python packages are needed for any provider — everything runs over
+  plain HTTP with libraries Anki already bundles.
 
 ## Installation
 
-### Option A — Run from this repo (development)
+Copy this folder into your Anki add-ons directory (`Tools → Add-ons → View Files`, drop
+the folder alongside the others) and restart Anki.
 
-This repo includes `runanki.py`, which launches Anki from a local virtual environment, so
-the add-on and its dependencies all live in that venv.
+## Configuration
+
+Open **Tools → AI Reviewer Settings**. The dialog has two tabs.
+
+### AI Providers tab
+
+1. **Use** — pick **Ollama**, **Gemini**, or **NVIDIA**.
+2. **If it fails, try** — **Nothing** (default) or **All other providers**. With fallback
+   on, a failing provider is silently replaced by the next one that is configured
+   (providers without an API key are skipped), and a small notice tells you which one
+   actually answered.
+3. **Ollama Settings** — endpoint (default `http://localhost:11434`) and model
+   (default `gemma4`).
+4. **Gemini Settings** — model (default `gemini-3.5-flash`) and your API key.
+5. **NVIDIA Settings** — model (default `deepseek-ai/deepseek-v4-flash`) and your API key.
+
+API keys are stored in the add-on's local `.env` file — never in Anki's synced
+configuration. Each can be removed with its **Delete API Key** button, and the file is
+deleted along with the add-on if you uninstall it.
+
+### Decks & General tab
+
+1. **Appearance** — the panel theme. **Native** (default) is built on Anki's own theme
+   variables, so it matches your Anki theme, light or dark, and follows night-mode
+   switches live. **Polished** is a custom design with its own light and dark variants.
+2. **Logging** — off by default. When enabled, saves each review conversation to a local
+   file (see [Conversation history](#conversation-history)).
+3. **Deck Configuration** — select a deck and set:
+   - **Source / Target language** — the language pair for that deck.
+   - **First field holds** — whether the note's *first* field is the **word being
+     learned** (default) or its **meaning/translation**. This tells the exercise and the
+     model which word is which. Reversed cards ("Basic (and reversed)") are detected
+     automatically, and the instruction never reveals the hidden side.
+   - **User level** (Beginner / Intermediate / Advanced)
+   - **Default Review** (Full or Quick)
+   - **AI Review** (Enabled / Disabled) — only enabled decks are intercepted.
+   - **Apply to subdecks** — extend this config to the deck's subdecks.
+
+   Click **Save Deck Config** per deck, then **Save All**.
+
+## Usage
+
+Review an enabled deck as usual:
+
+1. Optionally flip the **Quick review / Full review** toggle for this card.
+2. Type your answer and press **Submit** (Enter sends; Shift+Enter adds a newline).
+3. Read the feedback. The card flips to its back automatically, and you can ask follow-up
+   questions — the model keeps the card's context for the whole exchange.
+4. Grade the card with Anki's normal buttons whenever you're done.
+
+Revealing the answer *before* submitting (in any way — the panel's "Show answer instead"
+button, Anki's Show Answer, or the keyboard) skips the AI review for that card: you only
+get feedback if you try first.
+
+---
+
+## Technical details
+
+The rest of this document is for people who want to run the add-on from source, hack on
+it, or understand how it works.
+
+### Development setup
+
+The repo includes `runanki.py`, which launches Anki from a local virtual environment so
+the add-on and its dependencies live in that venv. Requires **Python 3.11**.
 
 ```bash
 # from the repo root
@@ -65,89 +117,61 @@ python3.11 -m venv venv
 ./venv/bin/python runanki.py
 ```
 
-Anki starts with the add-on loaded.
+Dependencies (`requirements.txt`): `anki`, `aqt`, `requests`, `Jinja2`.
 
-### Option B — Install into a normal Anki desktop app
+### Providers
 
-Copy this folder into your Anki add-ons directory (`Tools → Add-ons → View Files`,
-then drop the folder alongside the others) and restart Anki. Both backends work out of the
-box — they only use `requests`, which Anki already bundles, so there are no extra packages
-to install or vendor.
+All three providers are plain-HTTP clients in `providers.py`, built on `requests` (which
+Anki bundles) — deliberately no vendor SDKs, since Anki's launcher can prune its Python
+environment on update, which makes vendored compiled packages fragile:
 
-## Configuration
+- **Ollama** — `/api/chat`, streaming via NDJSON.
+- **Gemini** — REST `v1beta` `generateContent` / `streamGenerateContent` (SSE).
+- **NVIDIA** — the OpenAI-compatible `/v1/chat/completions` endpoint at
+  `integrate.api.nvidia.com` (SSE streaming). Requests ask DeepSeek-style models to skip
+  chain-of-thought (`chat_template_kwargs: {"thinking": false}`); any `<think>` output
+  that arrives anyway is stripped before display.
 
-Open **Tools → AI Reviewer Settings**.
+Provider errors are normalized to `RuntimeError` with user-readable messages.
 
-1. **Appearance** — pick the panel theme: **Native (match Anki)** or **Polished**.
-   Takes effect on the next card.
-2. **AI Provider** — choose **Ollama** or **Gemini**.
-3. **Ollama Settings** — endpoint (default `http://localhost:11434`) and model
-   (default `gemma3`).
-4. **Gemini Settings** — model (default `gemini-3.5-flash`) and your API key. The key is
-   stored in the add-on's `.env` file, can be deleted with the **Delete API Key** button,
-   and is removed automatically when you uninstall the add-on. It is never written into
-   Anki's synced config. (You can also set it manually in `.env` as `GEMINI_API_KEY=...`.)
-5. **Deck Configuration** — pick a deck and set:
-   - **Source / Target language** (the language pair for that deck)
-   - **First field holds** — whether the note's *first* field is the **word being
-     learned** (e.g. "comprometido" first, default) or its **meaning/translation**
-     (e.g. "committed" first). The plugin uses this to word the exercise correctly and
-     to tell the model which word is which. Reversed cards ("Basic (and reversed)")
-     are detected automatically from the card template, and the instruction never
-     reveals the hidden side.
-   - **User level** (Beginner / Intermediate / Advanced)
-   - **Default Review** (Full or Quick)
-   - **AI Review** (Enabled / Disabled) — only enabled decks are intercepted.
+**Fallback** is implemented by `stream_llm_with_fallback` / `chat_llm_with_fallback`,
+which try `config["provider"]` and then each entry of `config["fallback_providers"]` in
+order, skipping cloud providers without an API key, and return the reply together with
+the name of the provider that produced it. One deliberate rule: a provider that fails
+*mid-stream*, after text already reached the panel, is not fallen back on — a second
+provider would replay text you already saw. The settings dialog writes the fallback list
+as "all other providers", but it's an ordinary ordered list in the config, so you can
+reorder or trim it in Anki's add-on config editor.
 
-   Click **Save Deck Config** per deck, then **Save All**.
+`config.json` holds the shipped defaults; user settings are stored by Anki in
+`meta.json` and overlaid per top-level key. API keys live in the add-on's `.env`
+(`GEMINI_API_KEY`, `NVIDIA_API_KEY`), which is git-ignored and removed on uninstall.
 
-## Usage
+### Panel architecture
 
-Review an enabled deck as usual. Each card shows normally, with the AI panel underneath:
+The review panel (`web/ai_review.js`) is mounted as a sibling of Anki's `#qa` container,
+so the card template renders untouched above it and the panel survives the
+question→answer transition. All dynamic text crosses the Python↔JS boundary through
+`json.dumps` and lands via `textContent` — never `innerHTML`. LLM calls run in a
+background thread via Anki's task manager; streamed chunks are marshalled back to the
+main thread for live display. Prompts are Jinja2 templates under `prompts/`.
 
-1. Optionally flip the **Quick review / Full review** toggle for this card.
-2. Type your answer and press **Submit** (Enter sends; Shift+Enter adds a newline).
-3. Read the verdict and feedback. The card flips to its back automatically. You can now
-   **ask follow-up questions** via the "Ask a follow-up" button — the model keeps the
-   card's context for the whole exchange.
-4. Grade the card with Anki's normal Again/Hard/Good/Easy buttons whenever you're done.
-
-Revealing the answer *before* submitting (the "Show answer instead" button, Anki's own
-Show Answer button, or the keyboard) skips the AI review for that card — you only get
-the LLM's feedback if you try first.
-
-Decks that aren't enabled in the settings behave like normal Anki cards.
-
-## Running the tests
+### Running the tests
 
 ```bash
 ./venv/bin/python -m pytest
 ```
 
-The suite under `tests/` covers the feedback parsing, card direction / field-layout
-detection (including reversed cards), deck-config matching, conversation logging, and
-the provider plumbing (`.env` handling, request building, stream parsing — all offline
-with fakes). If Node.js is installed, it also smoke-tests the review panel's
-JavaScript against a DOM stub; without Node that one test is skipped.
+The suite under `tests/` covers feedback parsing, card direction / field-layout detection
+(including reversed cards), deck-config matching, conversation logging, and the provider
+plumbing (`.env` handling, request building, stream parsing, fallback chain — all offline
+with fakes). If Node.js is installed, it also smoke-tests the review panel's JavaScript
+against a DOM stub; without Node that test is skipped.
 
-## Conversation history
+### Conversation history
 
-Every card review is saved as one conversation. All conversations from a single review
-session are appended to one JSONL file (one line per card) under
-`user_files/conversations/` (override with `conversations_dir` in the config). The data
-isn't used by the add-on yet — it's there for your own history, analysis, or export.
-
-## Project layout
-
-| File | Purpose |
-|------|---------|
-| `__init__.py` | Add-on entry point; menu + hooks |
-| `reviewer.py` | Intercepts reviews, renders the UI, parses feedback, drives the chat |
-| `providers.py` | Backend abstraction (Ollama / Gemini), multi-turn chat, `.env` key handling |
-| `conversations.py` | Saves each conversation to the per-session JSONL log |
-| `config_dialog.py` | The settings dialog |
-| `prompts/` | Jinja2 prompt templates (`language_card.j2` = full, `quick_card.j2` = quick, `system_prompt.j2`) |
-| `web/` | The review panel's JS (`ai_review.js`) and themes (`ai_review.css`, `ai_review_polished.css`) |
-| `tests/` | Pytest suite (plus the Node-based JS panel test) |
-| `config.json` | Default configuration |
-| `.env` | Holds `GEMINI_API_KEY` (git-ignored) |
+When logging is enabled, every card review is saved as one conversation. All
+conversations from a single review session are appended to one JSONL file (one line per
+card) under `user_files/conversations/` (override with `conversations_dir` in the
+config), including which provider and model answered. The data isn't used by the add-on
+— it's there for your own history, analysis, or export.
