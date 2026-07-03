@@ -203,6 +203,43 @@
     overflow-wrap: break-word;
 }
 
+/* Markdown elements built by renderMarkdownInto (LLM output only). */
+.air-summary p,
+.air-section-text p,
+.air-feedback-body p,
+.air-bubble-ai p,
+.air-summary ul, .air-summary ol,
+.air-section-text ul, .air-section-text ol,
+.air-feedback-body ul, .air-feedback-body ol,
+.air-bubble-ai ul, .air-bubble-ai ol {
+    margin: 0 0 8px;
+}
+
+.air-summary > :last-child,
+.air-section-text > :last-child,
+.air-feedback-body > :last-child,
+.air-bubble-ai > :last-child {
+    margin-bottom: 0;
+}
+
+#ai-review-root ul,
+#ai-review-root ol {
+    padding-left: 20px;
+}
+
+#ai-review-root li {
+    margin: 2px 0;
+}
+
+#ai-review-root code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    background: var(--air-inset);
+    border: 1px solid var(--air-border-subtle);
+    border-radius: 4px;
+    padding: 0 4px;
+}
+
 .air-verdict {
     display: flex;
     align-items: baseline;
