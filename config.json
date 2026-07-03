@@ -11,6 +11,9 @@
   "nvidia": {
     "model": "deepseek-ai/deepseek-v4-flash"
   },
+  "cerebras": {
+    "model": "gpt-oss-120b"
+  },
   "fallback_providers": [],
   "logging_enabled": false,
   "conversations_dir": "",

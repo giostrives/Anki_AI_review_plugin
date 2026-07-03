@@ -1,10 +1,12 @@
 """
 LLM provider abstraction.
 
-Supports three backends, selected by config["provider"]:
+Supports four backends, selected by config["provider"]:
   - "ollama": local Ollama server via its /api/chat HTTP endpoint.
   - "gemini": Google Gemini via its REST v1beta generateContent endpoint.
   - "nvidia": NVIDIA API Catalog via its OpenAI-compatible chat/completions
+    endpoint.
+  - "cerebras": Cerebras Inference via its OpenAI-compatible chat/completions
     endpoint.
 
 All backends talk plain HTTP through `requests` (which Anki bundles), so the
@@ -18,6 +20,8 @@ import json
 import os
 
 import requests
+
+from .provider_models import PROVIDERS as _KNOWN_PROVIDERS
 
 _addon_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -103,6 +107,20 @@ def delete_nvidia_api_key():
     set_nvidia_api_key("")
 
 
+def cerebras_api_key():
+    """Return the Cerebras API key from `.env` (or env var), or empty string."""
+    return _get_api_key("CEREBRAS_API_KEY")
+
+
+def set_cerebras_api_key(key):
+    return _set_api_key("CEREBRAS_API_KEY", key)
+
+
+def delete_cerebras_api_key():
+    """Remove the stored Cerebras API key (clears it in `.env`)."""
+    set_cerebras_api_key("")
+
+
 def chat_llm(config, system, messages):
     """Send a multi-turn conversation to the configured provider and return the
     model's reply.
@@ -119,6 +137,8 @@ def chat_llm(config, system, messages):
         return _chat_gemini(config, system, messages)
     if provider == "nvidia":
         return _chat_nvidia(config, system, messages)
+    if provider == "cerebras":
+        return _chat_cerebras(config, system, messages)
     return _chat_ollama(config, system, messages)
 
 
@@ -140,6 +160,8 @@ def stream_llm(config, system, messages, on_chunk):
         return _stream_gemini(config, system, messages, on_chunk)
     if provider == "nvidia":
         return _stream_nvidia(config, system, messages, on_chunk)
+    if provider == "cerebras":
+        return _stream_cerebras(config, system, messages, on_chunk)
     return _stream_ollama(config, system, messages, on_chunk)
 
 
@@ -149,7 +171,7 @@ def _provider_chain(config):
     Unknown names and duplicates are dropped, so a hand-edited config can't
     break the chain.
     """
-    known = ("ollama", "gemini", "nvidia")
+    known = _KNOWN_PROVIDERS
     chain = [config.get("provider", "ollama")]
     for name in config.get("fallback_providers", []):
         if name in known and name not in chain:
@@ -167,6 +189,8 @@ def _is_configured(name):
         return bool(gemini_api_key())
     if name == "nvidia":
         return bool(nvidia_api_key())
+    if name == "cerebras":
+        return bool(cerebras_api_key())
     return True
 
 
@@ -512,4 +536,99 @@ def _stream_nvidia(config, system, messages, on_chunk):
         raise RuntimeError("Could not reach the NVIDIA API. Check your internet connection.")
     if not parts:
         raise RuntimeError("NVIDIA returned no usable text.")
+    return "".join(parts)
+
+
+CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
+
+
+def _cerebras_request_parts(config, system, messages, stream):
+    """Shared auth check + OpenAI-style request body for the Cerebras API."""
+    api_key = cerebras_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "No Cerebras API key found. Set it in the AI Reviewer settings "
+            "(or add CEREBRAS_API_KEY to the add-on's .env file)."
+        )
+
+    model = config.get("cerebras", {}).get("model", "gpt-oss-120b")
+
+    chat_messages = []
+    if system:
+        chat_messages.append({"role": "system", "content": system})
+    chat_messages.extend(messages)
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    body = {
+        "model": model,
+        "messages": chat_messages,
+        "stream": stream,
+    }
+    return headers, body
+
+
+def _cerebras_error(response):
+    try:
+        detail = response.json().get("error", {}).get("message", "")
+    except Exception:
+        detail = response.text[:200]
+    return RuntimeError(f"Cerebras API error ({response.status_code}): {detail}")
+
+
+def _chat_cerebras(config, system, messages):
+    headers, body = _cerebras_request_parts(config, system, messages, stream=False)
+
+    try:
+        response = requests.post(CEREBRAS_URL, headers=headers, json=body, timeout=120)
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError("Could not reach the Cerebras API. Check your internet connection.")
+
+    if response.status_code != 200:
+        raise _cerebras_error(response)
+
+    data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError(f"Cerebras returned no usable text. Response: {str(data)[:200]}")
+
+
+def _stream_cerebras(config, system, messages, on_chunk):
+    headers, body = _cerebras_request_parts(config, system, messages, stream=True)
+
+    parts = []
+    try:
+        with requests.post(
+            CEREBRAS_URL,
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=120,
+        ) as response:
+            if response.status_code != 200:
+                raise _cerebras_error(response)
+            for raw in response.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                if not line.startswith("data:"):
+                    continue
+                payload = line[len("data:"):].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    obj = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                try:
+                    delta = obj["choices"][0].get("delta", {}).get("content", "")
+                except (KeyError, IndexError, TypeError):
+                    continue
+                if delta:
+                    parts.append(delta)
+                    on_chunk(delta)
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError("Could not reach the Cerebras API. Check your internet connection.")
+    if not parts:
+        raise RuntimeError("Cerebras returned no usable text.")
     return "".join(parts)

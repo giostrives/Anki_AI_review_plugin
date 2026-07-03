@@ -12,10 +12,11 @@ from aqt.qt import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from aqt.utils import showInfo, tooltip
 
 from . import providers
+from . import provider_models
 
-# Dropdown order for the provider combo boxes; index <-> config name.
-_PROVIDERS = ["ollama", "gemini", "nvidia"]
-_PROVIDER_LABELS = ["Ollama", "Gemini", "NVIDIA"]
+# Dropdown order for the provider combo box; index <-> config name.
+_PROVIDERS = provider_models.PROVIDERS
+_PROVIDER_LABELS = [provider_models.PROVIDER_LABELS[p] for p in _PROVIDERS]
 
 
 def get_config():
@@ -96,8 +97,8 @@ class ConfigDialog(QDialog):
         self.endpoint_input = QLineEdit(
             ollama_cfg.get("endpoint") or self.config.get("ollama_endpoint", "http://localhost:11434"))
         ollama_layout.addRow("Endpoint:", self.endpoint_input)
-        self.model_input = QLineEdit(
-            ollama_cfg.get("model") or self.config.get("model", "gemma4"))
+        self.model_input = self._make_model_combo(
+            "ollama", ollama_cfg.get("model") or self.config.get("model", "gemma4"))
         ollama_layout.addRow("Model:", self.model_input)
         ollama_group.setLayout(ollama_layout)
         layout.addWidget(ollama_group)
@@ -106,7 +107,8 @@ class ConfigDialog(QDialog):
         gemini_cfg = self.config.get("gemini", {})
         gemini_group = QGroupBox("Gemini Settings")
         gemini_layout = QFormLayout()
-        self.gemini_model_input = QLineEdit(gemini_cfg.get("model", "gemini-3.5-flash"))
+        self.gemini_model_input = self._make_model_combo(
+            "gemini", gemini_cfg.get("model", "gemini-3.5-flash"))
         gemini_layout.addRow("Model:", self.gemini_model_input)
 
         self.gemini_key_input = QLineEdit(providers.gemini_api_key())
@@ -126,8 +128,8 @@ class ConfigDialog(QDialog):
         nvidia_cfg = self.config.get("nvidia", {})
         nvidia_group = QGroupBox("NVIDIA Settings")
         nvidia_layout = QFormLayout()
-        self.nvidia_model_input = QLineEdit(
-            nvidia_cfg.get("model", "deepseek-ai/deepseek-v4-flash"))
+        self.nvidia_model_input = self._make_model_combo(
+            "nvidia", nvidia_cfg.get("model", "deepseek-ai/deepseek-v4-flash"))
         nvidia_layout.addRow("Model:", self.nvidia_model_input)
 
         self.nvidia_key_input = QLineEdit(providers.nvidia_api_key())
@@ -143,9 +145,44 @@ class ConfigDialog(QDialog):
         nvidia_group.setLayout(nvidia_layout)
         layout.addWidget(nvidia_group)
 
+        # Cerebras settings
+        cerebras_cfg = self.config.get("cerebras", {})
+        cerebras_group = QGroupBox("Cerebras Settings")
+        cerebras_layout = QFormLayout()
+        self.cerebras_model_input = self._make_model_combo(
+            "cerebras", cerebras_cfg.get("model", "gpt-oss-120b"))
+        cerebras_layout.addRow("Model:", self.cerebras_model_input)
+
+        self.cerebras_key_input = QLineEdit(providers.cerebras_api_key())
+        self.cerebras_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.cerebras_key_input.setPlaceholderText("Paste your Cerebras API key")
+        cerebras_layout.addRow("API Key:", self.cerebras_key_input)
+
+        delete_cerebras_key_btn = QPushButton("Delete API Key")
+        delete_cerebras_key_btn.clicked.connect(self.delete_cerebras_key)
+        cerebras_layout.addRow("", delete_cerebras_key_btn)
+
+        cerebras_layout.addRow(QLabel("Stored in the add-on's .env; removed when you uninstall the add-on."))
+        cerebras_group.setLayout(cerebras_layout)
+        layout.addWidget(cerebras_group)
+
         layout.addStretch()
         tab.setLayout(layout)
         return tab
+
+    @staticmethod
+    def _make_model_combo(provider, current_value):
+        """Editable combo box seeded with known models for `provider`, prefilled
+        with `current_value` (which may be a custom string not in the list)."""
+        combo = QComboBox()
+        combo.addItems(provider_models.MODEL_OPTIONS[provider])
+        combo.setEditable(True)
+        idx = combo.findText(current_value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        else:
+            combo.setEditText(current_value)
+        return combo
 
     def _build_general_tab(self):
         """Appearance, logging, and per-deck configuration."""
@@ -321,6 +358,12 @@ class ConfigDialog(QDialog):
         self.nvidia_key_input.setText("")
         tooltip("NVIDIA API key deleted")
 
+    def delete_cerebras_key(self):
+        """Clear the stored Cerebras API key from .env and the input field"""
+        providers.delete_cerebras_api_key()
+        self.cerebras_key_input.setText("")
+        tooltip("Cerebras API key deleted")
+
     def save_deck_config(self):
         """Save configuration for currently selected deck"""
         current_item = self.deck_list.currentItem()
@@ -366,19 +409,23 @@ class ConfigDialog(QDialog):
             if self.fallback_select.currentIndex() == 1 else [])
         self.config["ollama"] = {
             "endpoint": self.endpoint_input.text(),
-            "model": self.model_input.text(),
+            "model": self.model_input.currentText(),
         }
         self.config["gemini"] = {
-            "model": self.gemini_model_input.text(),
+            "model": self.gemini_model_input.currentText(),
         }
         self.config["nvidia"] = {
-            "model": self.nvidia_model_input.text(),
+            "model": self.nvidia_model_input.currentText(),
+        }
+        self.config["cerebras"] = {
+            "model": self.cerebras_model_input.currentText(),
         }
         self.config["logging_enabled"] = self.logging_enabled.currentIndex() == 1
         self.config["conversations_dir"] = self.log_dir_input.text().strip()
         # API keys are stored in .env (removed on uninstall), never in the config.
         providers.set_gemini_api_key(self.gemini_key_input.text().strip())
         providers.set_nvidia_api_key(self.nvidia_key_input.text().strip())
+        providers.set_cerebras_api_key(self.cerebras_key_input.text().strip())
         # Drop the obsolete flat keys if present.
         self.config.pop("ollama_endpoint", None)
         self.config.pop("model", None)

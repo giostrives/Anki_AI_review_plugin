@@ -17,9 +17,10 @@ the card.
   turns as you like.
 - **Per-deck configuration** — each deck has its own language pair, user level, and
   default review style. Decks you don't enable behave like normal Anki cards.
-- **Three AI providers** — a local **Ollama** server, **Google Gemini**, or the
-  **NVIDIA API catalog**. Optionally, if your chosen provider fails (server down, quota
-  exceeded), the add-on can fall back to the others and tell you it did so.
+- **Four AI providers** — a local **Ollama** server, **Google Gemini**, the
+  **NVIDIA API catalog**, or **Cerebras**. Optionally, if your chosen provider fails
+  (server down, quota exceeded), the add-on can fall back to the others and tell you it
+  did so.
 - Grading stays native: after the feedback the card flips and you use Anki's normal
   Again/Hard/Good/Easy buttons.
 
@@ -33,9 +34,12 @@ the card.
   - **Google Gemini** — needs an API key from
     [Google AI Studio](https://aistudio.google.com/apikey).
   - **NVIDIA API catalog** — needs an API key from
-    [build.nvidia.com](https://build.nvidia.com); serves open models such as DeepSeek.
+    [build.nvidia.com](https://build.nvidia.com); serves open models such as DeepSeek,
+    Gemma, and GPT-OSS.
+  - **Cerebras** — needs an API key from [cloud.cerebras.ai](https://cloud.cerebras.ai);
+    serves GPT-OSS and Gemma at very high inference speed.
 
-  Both cloud providers have a free tier, which is generally enough for personal review
+  All cloud providers have a free tier, which is generally enough for personal review
   sessions. No extra Python packages are needed for any provider — everything runs over
   plain HTTP with libraries Anki already bundles.
 
@@ -50,7 +54,7 @@ Open **Tools → AI Reviewer Settings**. The dialog has two tabs.
 
 ### AI Providers tab
 
-1. **Use** — pick **Ollama**, **Gemini**, or **NVIDIA**.
+1. **Use** — pick **Ollama**, **Gemini**, **NVIDIA**, or **Cerebras**.
 2. **If it fails, try** — **Nothing** (default) or **All other providers**. With fallback
    on, a failing provider is silently replaced by the next one that is configured
    (providers without an API key are skipped), and a small notice tells you which one
@@ -59,6 +63,11 @@ Open **Tools → AI Reviewer Settings**. The dialog has two tabs.
    (default `gemma4`).
 4. **Gemini Settings** — model (default `gemini-3.5-flash`) and your API key.
 5. **NVIDIA Settings** — model (default `deepseek-ai/deepseek-v4-flash`) and your API key.
+6. **Cerebras Settings** — model (default `gpt-oss-120b`) and your API key.
+
+Each **Model** field is a dropdown seeded with known-good models for that provider, but
+it's editable — click in and type any model name the provider supports, not just the
+listed ones.
 
 API keys are stored in the add-on's local `.env` file — never in Anki's synced
 configuration. Each can be removed with its **Delete API Key** button, and the file is
@@ -121,7 +130,7 @@ Dependencies (`requirements.txt`): `anki`, `aqt`, `requests`, `Jinja2`.
 
 ### Providers
 
-All three providers are plain-HTTP clients in `providers.py`, built on `requests` (which
+All four providers are plain-HTTP clients in `providers.py`, built on `requests` (which
 Anki bundles) — deliberately no vendor SDKs, since Anki's launcher can prune its Python
 environment on update, which makes vendored compiled packages fragile:
 
@@ -131,8 +140,14 @@ environment on update, which makes vendored compiled packages fragile:
   `integrate.api.nvidia.com` (SSE streaming). Requests ask DeepSeek-style models to skip
   chain-of-thought (`chat_template_kwargs: {"thinking": false}`); any `<think>` output
   that arrives anyway is stripped before display.
+- **Cerebras** — the OpenAI-compatible `/v1/chat/completions` endpoint at
+  `api.cerebras.ai` (SSE streaming).
 
 Provider errors are normalized to `RuntimeError` with user-readable messages.
+`provider_models.py` is the single source of truth for the provider list, display labels,
+and each provider's dropdown of known models — both `providers.py` and
+`config_dialog.py` import it, so adding a provider or a model only means editing that one
+file plus the corresponding backend functions.
 
 **Fallback** is implemented by `stream_llm_with_fallback` / `chat_llm_with_fallback`,
 which try `config["provider"]` and then each entry of `config["fallback_providers"]` in
@@ -145,7 +160,8 @@ reorder or trim it in Anki's add-on config editor.
 
 `config.json` holds the shipped defaults; user settings are stored by Anki in
 `meta.json` and overlaid per top-level key. API keys live in the add-on's `.env`
-(`GEMINI_API_KEY`, `NVIDIA_API_KEY`), which is git-ignored and removed on uninstall.
+(`GEMINI_API_KEY`, `NVIDIA_API_KEY`, `CEREBRAS_API_KEY`), which is git-ignored and
+removed on uninstall.
 
 ### Panel architecture
 

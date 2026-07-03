@@ -12,6 +12,7 @@ def env_in_tmp(providers_mod, tmp_path, monkeypatch):
     monkeypatch.setattr(providers_mod, "_addon_dir", str(tmp_path))
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    monkeypatch.delenv("CEREBRAS_API_KEY", raising=False)
     return tmp_path
 
 
@@ -61,6 +62,12 @@ class TestEnvFile:
         providers_mod.set_gemini_api_key("gm2")
         assert providers_mod.nvidia_api_key() == "nv"
 
+    def test_cerebras_key_roundtrip(self, providers_mod, env_in_tmp):
+        providers_mod.set_cerebras_api_key("cb-123")
+        assert providers_mod.cerebras_api_key() == "cb-123"
+        providers_mod.delete_cerebras_api_key()
+        assert providers_mod.cerebras_api_key() == ""
+
 
 class TestDispatch:
     def test_chat_routes_by_provider(self, providers_mod, monkeypatch):
@@ -71,11 +78,14 @@ class TestDispatch:
                             lambda *a: calls.append("gemini"))
         monkeypatch.setattr(providers_mod, "_chat_nvidia",
                             lambda *a: calls.append("nvidia"))
+        monkeypatch.setattr(providers_mod, "_chat_cerebras",
+                            lambda *a: calls.append("cerebras"))
         providers_mod.chat_llm({"provider": "gemini"}, "sys", [])
         providers_mod.chat_llm({"provider": "ollama"}, "sys", [])
         providers_mod.chat_llm({"provider": "nvidia"}, "sys", [])
+        providers_mod.chat_llm({"provider": "cerebras"}, "sys", [])
         providers_mod.chat_llm({}, "sys", [])  # default is ollama
-        assert calls == ["gemini", "ollama", "nvidia", "ollama"]
+        assert calls == ["gemini", "ollama", "nvidia", "cerebras", "ollama"]
 
     def test_stream_routes_by_provider(self, providers_mod, monkeypatch):
         calls = []
@@ -85,10 +95,13 @@ class TestDispatch:
                             lambda *a: calls.append("gemini"))
         monkeypatch.setattr(providers_mod, "_stream_nvidia",
                             lambda *a: calls.append("nvidia"))
+        monkeypatch.setattr(providers_mod, "_stream_cerebras",
+                            lambda *a: calls.append("cerebras"))
         providers_mod.stream_llm({"provider": "gemini"}, "s", [], None)
         providers_mod.stream_llm({"provider": "nvidia"}, "s", [], None)
+        providers_mod.stream_llm({"provider": "cerebras"}, "s", [], None)
         providers_mod.stream_llm({}, "s", [], None)
-        assert calls == ["gemini", "nvidia", "ollama"]
+        assert calls == ["gemini", "nvidia", "cerebras", "ollama"]
 
     def test_gemini_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No Gemini API key"):
@@ -97,6 +110,10 @@ class TestDispatch:
     def test_nvidia_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No NVIDIA API key"):
             providers_mod._chat_nvidia({}, "sys", [])
+
+    def test_cerebras_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
+        with pytest.raises(RuntimeError, match="No Cerebras API key"):
+            providers_mod._chat_cerebras({}, "sys", [])
 
 
 class FakeResponse:
@@ -280,11 +297,102 @@ class TestNvidiaRequest:
             providers_mod._stream_nvidia({}, None, [], lambda d: None)
 
 
+class TestCerebrasRequest:
+    def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_cerebras_api_key("cb-k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(url=url, headers=headers, body=json)
+            return FakeResponse(200, {
+                "choices": [{"message": {"role": "assistant", "content": "ok!"}}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        reply = providers_mod._chat_cerebras(
+            {}, "be nice", [{"role": "user", "content": "hola"}])
+        assert reply == "ok!"
+        assert captured["url"] == "https://api.cerebras.ai/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer cb-k"
+        body = captured["body"]
+        assert body["model"] == "gpt-oss-120b"  # default
+        assert body["stream"] is False
+        # System prompt travels as a leading OpenAI-style system message.
+        assert body["messages"][0] == {"role": "system", "content": "be nice"}
+        assert body["messages"][1]["content"] == "hola"
+
+    def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_cerebras_api_key("k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(body=json)
+            return FakeResponse(200, {"choices": [{"message": {"content": "x"}}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        providers_mod._chat_cerebras(
+            {"cerebras": {"model": "gemma-4-31b"}}, None, [])
+        assert captured["body"]["model"] == "gemma-4-31b"
+
+    def test_api_error_surfaces_message(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_cerebras_api_key("k")
+        monkeypatch.setattr(
+            providers_mod.requests, "post",
+            lambda *a, **kw: FakeResponse(402, {"error": {"message": "out of credits"}}))
+        with pytest.raises(RuntimeError, match=r"402.*out of credits"):
+            providers_mod._chat_cerebras({}, None, [])
+
+    def test_malformed_body_raises(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_cerebras_api_key("k")
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, {"choices": []}))
+        with pytest.raises(RuntimeError, match="no usable text"):
+            providers_mod._chat_cerebras({}, None, [])
+
+    def test_sse_stream(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_cerebras_api_key("k")
+
+        def sse(delta):
+            return ("data: " + json.dumps({"choices": [{"delta": delta}]})).encode()
+
+        lines = [
+            sse({"role": "assistant"}),  # role-only first event, no content
+            sse({"content": "Ho"}),
+            b": comment",
+            sse({"content": "la"}),
+            b"data: [DONE]",
+        ]
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, lines=lines))
+        chunks = []
+        reply = providers_mod._stream_cerebras({}, None, [], chunks.append)
+        assert reply == "Hola"
+        assert chunks == ["Ho", "la"]
+
+    def test_empty_stream_raises(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_cerebras_api_key("k")
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, lines=[b"data: [DONE]"]))
+        with pytest.raises(RuntimeError, match="no usable text"):
+            providers_mod._stream_cerebras({}, None, [], lambda d: None)
+
+
+class TestProviderModels:
+    def test_every_provider_has_labels_and_models(self, provider_models_mod):
+        for provider in provider_models_mod.PROVIDERS:
+            assert provider in provider_models_mod.PROVIDER_LABELS
+            assert provider_models_mod.PROVIDER_LABELS[provider]
+            assert provider in provider_models_mod.MODEL_OPTIONS
+            assert len(provider_models_mod.MODEL_OPTIONS[provider]) > 0
+
+    def test_cerebras_is_registered(self, provider_models_mod):
+        assert "cerebras" in provider_models_mod.PROVIDERS
+
+
 class TestFallback:
     def test_chain_is_primary_plus_fallbacks_deduped(self, providers_mod):
         cfg = {"provider": "gemini",
-               "fallback_providers": ["gemini", "bogus", "ollama", "nvidia", "ollama"]}
-        assert providers_mod._provider_chain(cfg) == ["gemini", "ollama", "nvidia"]
+               "fallback_providers": ["gemini", "bogus", "ollama", "nvidia", "ollama", "cerebras"]}
+        assert providers_mod._provider_chain(cfg) == ["gemini", "ollama", "nvidia", "cerebras"]
 
     def test_chain_without_fallbacks_is_primary_only(self, providers_mod):
         assert providers_mod._provider_chain({}) == ["ollama"]

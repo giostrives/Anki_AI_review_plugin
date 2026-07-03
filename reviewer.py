@@ -371,6 +371,8 @@ class AIReviewer:
             model = config.get("gemini", {}).get("model", "")
         elif provider == "nvidia":
             model = config.get("nvidia", {}).get("model", "deepseek-ai/deepseek-v4-flash")
+        elif provider == "cerebras":
+            model = config.get("cerebras", {}).get("model", "gpt-oss-120b")
         else:
             model = config.get("ollama", {}).get("model") or config.get("model", "gemma4")
         return {

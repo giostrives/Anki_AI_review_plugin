@@ -50,6 +50,11 @@ def providers_mod():
     return load("providers")
 
 
+@pytest.fixture(scope="session")
+def provider_models_mod():
+    return load("provider_models")
+
+
 class FakeNote:
     def __init__(self, fields, names):
         self.fields = fields
