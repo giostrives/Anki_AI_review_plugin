@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build a distributable .ankiaddon for the "Anki AI review" add-on.
+# Build a distributable .ankiaddon for the "AI Language Tutor" add-on.
 #
 # Uses an explicit ALLOWLIST (never a blacklist) so only vetted files ever enter
 # the archive.
@@ -47,9 +47,12 @@ DIRS=(
 # --- Version (read from manifest.json) ----------------------------------------
 VERSION="$(python3 -c "import json,sys; print(json.load(open('manifest.json')).get('human_version') or json.load(open('manifest.json')).get('version') or '0.0.0')" 2>/dev/null || echo "0.0.0")"
 PACKAGE="$(python3 -c "import json; print(json.load(open('manifest.json'))['package'])")"
-OUT="$ROOT/${PACKAGE}-${VERSION}.ankiaddon"
+NAME="$(python3 -c "import json; print(json.load(open('manifest.json'))['name'])")"
+# Output filename is a slug of the display name (folder/package stays $PACKAGE).
+SLUG="$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')"
+OUT="$ROOT/${SLUG}-${VERSION}.ankiaddon"
 
-echo ">> Building ${PACKAGE} v${VERSION}"
+echo ">> Building ${NAME} (package: ${PACKAGE}) v${VERSION}"
 
 # --- Stage --------------------------------------------------------------------
 rm -rf "$STAGE_DIR"

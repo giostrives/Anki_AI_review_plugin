@@ -1,7 +1,8 @@
 """
-Configuration dialog for AI Reviewer
+Configuration dialog for AI Language Tutor
 """
 
+import json
 import os
 
 from aqt import mw
@@ -20,8 +21,26 @@ _PROVIDER_LABELS = [provider_models.PROVIDER_LABELS[p] for p in _PROVIDERS]
 
 
 def get_config():
-    """Load configuration"""
-    return mw.addonManager.getConfig(__name__)
+    """Load the add-on config.
+
+    Anki merges the user's saved settings over the defaults in config.json and
+    returns that. If it hands back None (e.g. config.json wasn't readable in the
+    install folder), fall back to the shipped defaults so the UI never crashes.
+    """
+    config = mw.addonManager.getConfig(__name__)
+    if config is None:
+        config = _default_config()
+    return config
+
+
+def _default_config():
+    """The shipped defaults, read straight from the bundled config.json."""
+    path = os.path.join(os.path.dirname(__file__), "config.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
 
 
 def save_config(config):
@@ -37,7 +56,7 @@ class ConfigDialog(QDialog):
         self.load_decks()
 
     def setup_ui(self):
-        self.setWindowTitle("AI Reviewer Configuration")
+        self.setWindowTitle("AI Language Tutor Settings")
         self.setMinimumWidth(600)
         self.setMinimumHeight(560)
 

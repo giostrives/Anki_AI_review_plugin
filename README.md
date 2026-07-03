@@ -1,9 +1,9 @@
-# Anki AI Review Plugin
+# AI Language Tutor
 
-An Anki add-on that turns passive flashcard reviews into active practice. For decks you
-opt in, instead of just flipping a card you're asked to **use the word in a sentence** (or
-translate it), and a language model checks your answer and gives feedback before you grade
-the card.
+An Anki add-on that turns passive flashcard reviews into active practice. In decks where
+you enable it, instead of just flipping a card you're asked to **use the word in a
+sentence** (or translate it), and a language model checks your answer and gives feedback
+before you grade the card.
 
 ## What it does
 
@@ -50,7 +50,8 @@ the folder alongside the others) and restart Anki.
 
 ## Configuration
 
-Open **Tools → AI Reviewer Settings**. The dialog has two tabs.
+Open **Tools → AI Language Tutor Settings** (or the **Config** button in Anki's
+Add-ons manager). The dialog has two tabs.
 
 ### AI Providers tab
 

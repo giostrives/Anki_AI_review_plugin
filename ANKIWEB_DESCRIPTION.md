@@ -5,12 +5,21 @@ Markdown. This file is NOT part of the packaged add-on (build_ankiaddon.sh
 excludes it) — it lives in the repo only.
 -->
 
-# Anki AI Review
+# AI Language Tutor
 
-Turn passive flashcard reviews into active practice. For decks you opt in,
-instead of just flipping a card you're asked to **use the word in a sentence**
-(or translate it), and a language model checks your answer and gives feedback
-**before** you grade the card. Decks you don't enable behave like normal Anki.
+Turn passive flashcard reviews into active practice. In decks where you enable
+it, instead of just flipping a card you're asked to **use the word in a
+sentence** (or translate it), and a language model checks your answer and gives
+feedback **before** you grade the card.
+
+Two things before it does anything at all:
+
+1. **Turn it on per deck.** The add-on is off by default. In the settings you
+   enable **AI Review** for each deck you want (optionally extending it to that
+   deck's subdecks). Every other deck reviews exactly as normal Anki.
+2. **Give it an AI provider.** Either a local **Ollama** server (free, no
+   account, nothing leaves your machine) or an API key for **Google Gemini**,
+   the **NVIDIA API catalog**, or **Cerebras** — all of which have free tiers.
 
 ## Features
 
@@ -31,8 +40,8 @@ instead of just flipping a card you're asked to **use the word in a sentence**
 ## Requirements
 
 - **Anki 2.1.55 or newer** (tested on 25.9.x).
-- **One AI provider** (each cloud option has a free tier that is generally
-  enough for personal review sessions):
+- **One AI provider** — the free tiers of the cloud options are generally
+  enough for personal review sessions:
   - **Ollama** — a local LLM server. No API key, nothing leaves your machine.
     Install from ollama.com and pull a model (e.g. `ollama pull gemma4`).
   - **Google Gemini** — API key from Google AI Studio.
@@ -45,7 +54,8 @@ libraries Anki already bundles.
 
 ## Configuration
 
-Open **Tools → AI Reviewer Settings**. Two tabs:
+Open **Tools → AI Language Tutor Settings** (or the **Config** button in Anki's
+Add-ons manager). Two tabs:
 
 **AI Providers** — pick the provider to **Use**, optionally turn on
 **If it fails, try → All other providers**, and enter the model + API key for
@@ -63,8 +73,10 @@ set:
   learned (default) or its meaning. Reversed cards are detected automatically.
 - **User level** (Beginner / Intermediate / Advanced).
 - **Default Review** (Full or Quick).
-- **AI Review** (Enabled / Disabled) — only enabled decks are intercepted.
-- **Apply to subdecks** — optional.
+- **AI Review** (Enabled / Disabled) — the switch that actually turns the
+  add-on on for this deck.
+- **Apply to subdecks** — extends the whole config, including that switch, to
+  the deck's subdecks.
 
 Click **Save Deck Config** per deck, then **Save All**.
 
@@ -85,4 +97,4 @@ you only get feedback if you try first.
 
 ---
 
-Source, issues, and full documentation: <add your GitHub/homepage URL here>
+Source, issues, and full documentation: [Giostrives Anki AI Review repository](https://github.com/giostrives/Anki_AI_review_plugin)

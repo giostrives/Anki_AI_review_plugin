@@ -20,6 +20,7 @@ from aqt.utils import tooltip
 from aqt.webview import WebContent
 
 from . import conversations, providers
+from .config_dialog import get_config
 from .prompts import (conversation_prompt, language_card_prompt,
                       quick_card_prompt, system_prompt)
 
@@ -37,7 +38,7 @@ class AIReviewer:
         self.first_feedback = None  # the evaluation reply (think-stripped)
         self.chat_system = None     # tutor system prompt for the follow-up chat
         self.chat_messages = None   # follow-up turns only (no evaluation context)
-        config = mw.addonManager.getConfig(__name__)
+        config = get_config()
         # Only commit to a session file when logging is on; off by default so a
         # fresh install writes nothing and creates no folder.
         self.session_path = (
@@ -96,7 +97,7 @@ class AIReviewer:
         self.flush_conversation()
 
         deck_name = mw.col.decks.name(card.did)
-        config = mw.addonManager.getConfig(__name__)
+        config = get_config()
         deck_configs = config.get("deck_configs", {})
 
         self.deck_config = self._match_deck_config(deck_name, deck_configs)
@@ -230,7 +231,7 @@ class AIReviewer:
     def evaluate_answer(self, answer, mode="full"):
         """Evaluate user's answer with the configured AI provider"""
         card_data = self.get_card_data()
-        config = mw.addonManager.getConfig(__name__)
+        config = get_config()
 
         template = quick_card_prompt if mode == "quick" else language_card_prompt
         prompt = template.render(
@@ -325,7 +326,7 @@ class AIReviewer:
         """
         if self.conv_meta is None or self.chat_system is None:
             return
-        config = mw.addonManager.getConfig(__name__)
+        config = get_config()
         web = mw.reviewer.web
 
         self.chat_messages.append({"role": "user", "content": text})
@@ -404,7 +405,7 @@ class AIReviewer:
         record = {k: v for k, v in self.conv_meta.items() if k != "answer"}
         record["messages"] = messages
 
-        config = mw.addonManager.getConfig(__name__)
+        config = get_config()
         if conversations.is_enabled(config):
             if not self.session_path:
                 self.session_path = conversations.new_session_path(config)
