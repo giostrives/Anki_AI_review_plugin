@@ -270,8 +270,8 @@ class ConfigDialog(QDialog):
         # what the instruction may show and how the LLM prompt is filled.
         self.front_field = QComboBox()
         self.front_field.addItems([
-            "Word being learned (target language)",
-            "Meaning / translation (source language)",
+            "Word being learned (language you're learning)",
+            "Meaning / translation (language you speak)",
         ])
 
         # User level dropdown
@@ -282,8 +282,8 @@ class ConfigDialog(QDialog):
         self.review_mode = QComboBox()
         self.review_mode.addItems(["Full", "Quick"])
 
-        lang_layout.addRow("Source Language:", self.source_lang)
-        lang_layout.addRow("Target Language:", self.target_lang)
+        lang_layout.addRow("You speak:", self.source_lang)
+        lang_layout.addRow("You're learning:", self.target_lang)
         lang_layout.addRow("First field holds:", self.front_field)
         lang_layout.addRow("User Level:", self.user_level)
         lang_layout.addRow("Default Review:", self.review_mode)
@@ -393,9 +393,20 @@ class ConfigDialog(QDialog):
         deck_name = current_item.text()
 
         if not self.source_lang.text() or not self.target_lang.text():
-            showInfo("Please enter both source and target languages")
+            showInfo("Please fill in both language fields")
             return
 
+        self._store_deck_config(deck_name)
+
+        tooltip(f"Configuration saved for {deck_name}")
+        # Reflect "Apply to subdecks" immediately: collapse newly covered subdecks.
+        self.load_decks()
+        match = self.deck_list.findItems(deck_name, Qt.MatchFlag.MatchExactly)
+        if match:
+            self.deck_list.setCurrentItem(match[0])
+
+    def _store_deck_config(self, deck_name):
+        """Write the deck form's current values into self.config (in memory)."""
         if "deck_configs" not in self.config:
             self.config["deck_configs"] = {}
 
@@ -409,15 +420,15 @@ class ConfigDialog(QDialog):
             "include_subdecks": self.subdeck_checkbox.currentIndex() == 1
         }
 
-        tooltip(f"Configuration saved for {deck_name}")
-        # Reflect "Apply to subdecks" immediately: collapse newly covered subdecks.
-        self.load_decks()
-        match = self.deck_list.findItems(deck_name, Qt.MatchFlag.MatchExactly)
-        if match:
-            self.deck_list.setCurrentItem(match[0])
-
     def save_and_close(self):
         """Save all settings and close"""
+        # "Save All" also captures the deck currently being edited, so a
+        # separate "Save Deck Config" click isn't required. Skipped when the
+        # languages are incomplete: an untouched selection stays untouched.
+        current_item = self.deck_list.currentItem()
+        if current_item and self.source_lang.text() and self.target_lang.text():
+            self._store_deck_config(current_item.text())
+
         self.config["theme"] = "polished" if self.theme_select.currentIndex() == 1 else "native"
         primary = _PROVIDERS[self.provider_select.currentIndex()]
         self.config["provider"] = primary
