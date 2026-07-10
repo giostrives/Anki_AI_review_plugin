@@ -1,13 +1,19 @@
 """
 LLM provider abstraction.
 
-Supports four backends, selected by config["provider"]:
+Supports several backends, selected by config["provider"]:
   - "ollama": local Ollama server via its /api/chat HTTP endpoint.
   - "gemini": Google Gemini via its REST v1beta generateContent endpoint.
   - "nvidia": NVIDIA API Catalog via its OpenAI-compatible chat/completions
     endpoint.
   - "cerebras": Cerebras Inference via its OpenAI-compatible chat/completions
     endpoint.
+  - "openai": OpenAI chat/completions.
+  - "xai": xAI (Grok) chat/completions.
+  - "custom": any user-configured OpenAI-compatible chat/completions endpoint.
+
+NVIDIA, Cerebras, OpenAI, xAI and "custom" share one OpenAI-compatible client
+(see `_openai_compat_*`).
 
 All backends talk plain HTTP through `requests` (which Anki bundles), so the
 add-on needs no extra Python packages. Cloud API keys are read from the
@@ -121,6 +127,52 @@ def delete_cerebras_api_key():
     set_cerebras_api_key("")
 
 
+def openai_api_key():
+    """Return the OpenAI API key from `.env` (or env var), or empty string."""
+    return _get_api_key("OPENAI_API_KEY")
+
+
+def set_openai_api_key(key):
+    return _set_api_key("OPENAI_API_KEY", key)
+
+
+def delete_openai_api_key():
+    """Remove the stored OpenAI API key (clears it in `.env`)."""
+    set_openai_api_key("")
+
+
+def xai_api_key():
+    """Return the xAI API key from `.env` (or env var), or empty string."""
+    return _get_api_key("XAI_API_KEY")
+
+
+def set_xai_api_key(key):
+    return _set_api_key("XAI_API_KEY", key)
+
+
+def delete_xai_api_key():
+    """Remove the stored xAI API key (clears it in `.env`)."""
+    set_xai_api_key("")
+
+
+def custom_api_key():
+    """Return the Custom-provider API key from `.env` (or env var), or "".
+
+    Optional for OpenAI-compatible custom endpoints: a self-hosted server may
+    require no auth at all.
+    """
+    return _get_api_key("CUSTOM_API_KEY")
+
+
+def set_custom_api_key(key):
+    return _set_api_key("CUSTOM_API_KEY", key)
+
+
+def delete_custom_api_key():
+    """Remove the stored Custom API key (clears it in `.env`)."""
+    set_custom_api_key("")
+
+
 def chat_llm(config, system, messages):
     """Send a multi-turn conversation to the configured provider and return the
     model's reply.
@@ -139,6 +191,12 @@ def chat_llm(config, system, messages):
         return _chat_nvidia(config, system, messages)
     if provider == "cerebras":
         return _chat_cerebras(config, system, messages)
+    if provider == "openai":
+        return _chat_openai(config, system, messages)
+    if provider == "xai":
+        return _chat_xai(config, system, messages)
+    if provider == "custom":
+        return _chat_custom(config, system, messages)
     return _chat_ollama(config, system, messages)
 
 
@@ -162,6 +220,12 @@ def stream_llm(config, system, messages, on_chunk):
         return _stream_nvidia(config, system, messages, on_chunk)
     if provider == "cerebras":
         return _stream_cerebras(config, system, messages, on_chunk)
+    if provider == "openai":
+        return _stream_openai(config, system, messages, on_chunk)
+    if provider == "xai":
+        return _stream_xai(config, system, messages, on_chunk)
+    if provider == "custom":
+        return _stream_custom(config, system, messages, on_chunk)
     return _stream_ollama(config, system, messages, on_chunk)
 
 
@@ -179,11 +243,12 @@ def _provider_chain(config):
     return chain
 
 
-def _is_configured(name):
+def _is_configured(name, config):
     """Whether a provider is worth trying at all (cloud ones need a key).
 
     Ollama always qualifies: it needs no key, and an unreachable server is a
-    runtime failure the chain already handles by moving on.
+    runtime failure the chain already handles by moving on. Custom needs a
+    base URL but no key (auth is optional for self-hosted servers).
     """
     if name == "gemini":
         return bool(gemini_api_key())
@@ -191,6 +256,12 @@ def _is_configured(name):
         return bool(nvidia_api_key())
     if name == "cerebras":
         return bool(cerebras_api_key())
+    if name == "openai":
+        return bool(openai_api_key())
+    if name == "xai":
+        return bool(xai_api_key())
+    if name == "custom":
+        return bool((config.get("custom", {}).get("endpoint") or "").strip())
     return True
 
 
@@ -236,7 +307,7 @@ def _run_with_fallback(config, call, midstream=None):
         return call(config), chain[0]
     failures = []
     for name in chain:
-        if not _is_configured(name):
+        if not _is_configured(name, config):
             failures.append(f"{name}: no API key configured")
             continue
         try:
@@ -439,79 +510,76 @@ def _stream_gemini(config, system, messages, on_chunk):
     return "".join(parts)
 
 
-NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+# --- Shared OpenAI-compatible chat/completions client ------------------------
+#
+# NVIDIA, Cerebras, OpenAI, xAI and the "custom" provider all speak the same
+# OpenAI /chat/completions dialect (Bearer auth, a `messages` array, and either
+# a JSON reply or an SSE `data:` stream of choice deltas). These helpers hold
+# that one implementation; each provider only supplies its URL, resolved key,
+# display name (used in error messages) and any extra body fields.
 
 
-def _nvidia_request_parts(config, system, messages, stream):
-    """Shared auth check + OpenAI-style request body for the NVIDIA API."""
-    api_key = nvidia_api_key()
-    if not api_key:
-        raise RuntimeError(
-            "No NVIDIA API key found. Set it in the AI Reviewer settings "
-            "(or add NVIDIA_API_KEY to the add-on's .env file)."
-        )
+def _openai_compat_request_parts(api_key, model, system, messages, stream,
+                                 extra_body=None):
+    """Build the headers + OpenAI-style body for a chat/completions request.
 
-    model = config.get("nvidia", {}).get("model", "deepseek-ai/deepseek-v4-flash")
-
+    `api_key` is already resolved; when it is empty no Authorization header is
+    sent (self-hosted custom endpoints may not require auth).
+    """
     chat_messages = []
     if system:
         chat_messages.append({"role": "system", "content": system})
     chat_messages.extend(messages)
 
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {
-        "model": model,
-        "messages": chat_messages,
-        "temperature": 1,
-        "top_p": 0.95,
-        "max_tokens": 16384,
-        # Ask DeepSeek-style models to skip chain-of-thought output.
-        "chat_template_kwargs": {"thinking": False},
-        "stream": stream,
-    }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    body = {"model": model, "messages": chat_messages, "stream": stream}
+    if extra_body:
+        body.update(extra_body)
     return headers, body
 
 
-def _nvidia_error(response):
+def _openai_compat_error(response, name):
     try:
         detail = response.json().get("error", {}).get("message", "")
     except Exception:
         detail = response.text[:200]
-    return RuntimeError(f"NVIDIA API error ({response.status_code}): {detail}")
+    return RuntimeError(f"{name} API error ({response.status_code}): {detail}")
 
 
-def _chat_nvidia(config, system, messages):
-    headers, body = _nvidia_request_parts(config, system, messages, stream=False)
-
+def _openai_compat_chat(url, headers, body, name):
+    """Non-streaming chat/completions call against an OpenAI-compatible API."""
     try:
-        response = requests.post(NVIDIA_URL, headers=headers, json=body, timeout=120)
+        response = requests.post(url, headers=headers, json=body, timeout=120)
     except requests.exceptions.ConnectionError:
-        raise RuntimeError("Could not reach the NVIDIA API. Check your internet connection.")
+        raise RuntimeError(
+            f"Could not reach the {name} API. Check your internet connection.")
 
     if response.status_code != 200:
-        raise _nvidia_error(response)
+        raise _openai_compat_error(response, name)
 
     data = response.json()
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
-        raise RuntimeError(f"NVIDIA returned no usable text. Response: {str(data)[:200]}")
+        raise RuntimeError(f"{name} returned no usable text. Response: {str(data)[:200]}")
 
 
-def _stream_nvidia(config, system, messages, on_chunk):
-    headers, body = _nvidia_request_parts(config, system, messages, stream=True)
-
+def _openai_compat_stream(url, headers, body, name, on_chunk):
+    """Streaming chat/completions call against an OpenAI-compatible API."""
     parts = []
     try:
         with requests.post(
-            NVIDIA_URL,
+            url,
             headers=headers,
             json=body,
             stream=True,
             timeout=120,
         ) as response:
             if response.status_code != 200:
-                raise _nvidia_error(response)
+                raise _openai_compat_error(response, name)
             for raw in response.iter_lines():
                 if not raw:
                     continue
@@ -533,10 +601,46 @@ def _stream_nvidia(config, system, messages, on_chunk):
                     parts.append(delta)
                     on_chunk(delta)
     except requests.exceptions.ConnectionError:
-        raise RuntimeError("Could not reach the NVIDIA API. Check your internet connection.")
+        raise RuntimeError(
+            f"Could not reach the {name} API. Check your internet connection.")
     if not parts:
-        raise RuntimeError("NVIDIA returned no usable text.")
+        raise RuntimeError(f"{name} returned no usable text.")
     return "".join(parts)
+
+
+NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+
+
+def _nvidia_request_parts(config, system, messages, stream):
+    """Shared auth check + OpenAI-style request body for the NVIDIA API."""
+    api_key = nvidia_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "No NVIDIA API key found. Set it in the AI Reviewer settings "
+            "(or add NVIDIA_API_KEY to the add-on's .env file)."
+        )
+
+    model = config.get("nvidia", {}).get("model", "deepseek-ai/deepseek-v4-flash")
+    return _openai_compat_request_parts(
+        api_key, model, system, messages, stream,
+        extra_body={
+            "temperature": 1,
+            "top_p": 0.95,
+            "max_tokens": 16384,
+            # Ask DeepSeek-style models to skip chain-of-thought output.
+            "chat_template_kwargs": {"thinking": False},
+        },
+    )
+
+
+def _chat_nvidia(config, system, messages):
+    headers, body = _nvidia_request_parts(config, system, messages, stream=False)
+    return _openai_compat_chat(NVIDIA_URL, headers, body, "NVIDIA")
+
+
+def _stream_nvidia(config, system, messages, on_chunk):
+    headers, body = _nvidia_request_parts(config, system, messages, stream=True)
+    return _openai_compat_stream(NVIDIA_URL, headers, body, "NVIDIA", on_chunk)
 
 
 CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
@@ -552,83 +656,111 @@ def _cerebras_request_parts(config, system, messages, stream):
         )
 
     model = config.get("cerebras", {}).get("model", "gpt-oss-120b")
-
-    chat_messages = []
-    if system:
-        chat_messages.append({"role": "system", "content": system})
-    chat_messages.extend(messages)
-
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {
-        "model": model,
-        "messages": chat_messages,
-        "stream": stream,
-    }
-    return headers, body
-
-
-def _cerebras_error(response):
-    try:
-        detail = response.json().get("error", {}).get("message", "")
-    except Exception:
-        detail = response.text[:200]
-    return RuntimeError(f"Cerebras API error ({response.status_code}): {detail}")
+    return _openai_compat_request_parts(api_key, model, system, messages, stream)
 
 
 def _chat_cerebras(config, system, messages):
     headers, body = _cerebras_request_parts(config, system, messages, stream=False)
-
-    try:
-        response = requests.post(CEREBRAS_URL, headers=headers, json=body, timeout=120)
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError("Could not reach the Cerebras API. Check your internet connection.")
-
-    if response.status_code != 200:
-        raise _cerebras_error(response)
-
-    data = response.json()
-    try:
-        return data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        raise RuntimeError(f"Cerebras returned no usable text. Response: {str(data)[:200]}")
+    return _openai_compat_chat(CEREBRAS_URL, headers, body, "Cerebras")
 
 
 def _stream_cerebras(config, system, messages, on_chunk):
     headers, body = _cerebras_request_parts(config, system, messages, stream=True)
+    return _openai_compat_stream(CEREBRAS_URL, headers, body, "Cerebras", on_chunk)
 
-    parts = []
-    try:
-        with requests.post(
-            CEREBRAS_URL,
-            headers=headers,
-            json=body,
-            stream=True,
-            timeout=120,
-        ) as response:
-            if response.status_code != 200:
-                raise _cerebras_error(response)
-            for raw in response.iter_lines():
-                if not raw:
-                    continue
-                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                if not line.startswith("data:"):
-                    continue
-                payload = line[len("data:"):].strip()
-                if not payload or payload == "[DONE]":
-                    continue
-                try:
-                    obj = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-                try:
-                    delta = obj["choices"][0].get("delta", {}).get("content", "")
-                except (KeyError, IndexError, TypeError):
-                    continue
-                if delta:
-                    parts.append(delta)
-                    on_chunk(delta)
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError("Could not reach the Cerebras API. Check your internet connection.")
-    if not parts:
-        raise RuntimeError("Cerebras returned no usable text.")
-    return "".join(parts)
+
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+
+def _openai_request_parts(config, system, messages, stream):
+    """Shared auth check + OpenAI-style request body for the OpenAI API."""
+    api_key = openai_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "No OpenAI API key found. Set it in the AI Reviewer settings "
+            "(or add OPENAI_API_KEY to the add-on's .env file)."
+        )
+
+    model = config.get("openai", {}).get("model", "gpt-5.1")
+    return _openai_compat_request_parts(api_key, model, system, messages, stream)
+
+
+def _chat_openai(config, system, messages):
+    headers, body = _openai_request_parts(config, system, messages, stream=False)
+    return _openai_compat_chat(OPENAI_URL, headers, body, "OpenAI")
+
+
+def _stream_openai(config, system, messages, on_chunk):
+    headers, body = _openai_request_parts(config, system, messages, stream=True)
+    return _openai_compat_stream(OPENAI_URL, headers, body, "OpenAI", on_chunk)
+
+
+XAI_URL = "https://api.x.ai/v1/chat/completions"
+
+
+def _xai_request_parts(config, system, messages, stream):
+    """Shared auth check + OpenAI-style request body for the xAI (Grok) API."""
+    api_key = xai_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "No xAI API key found. Set it in the AI Reviewer settings "
+            "(or add XAI_API_KEY to the add-on's .env file)."
+        )
+
+    model = config.get("xai", {}).get("model", "grok-4")
+    return _openai_compat_request_parts(api_key, model, system, messages, stream)
+
+
+def _chat_xai(config, system, messages):
+    headers, body = _xai_request_parts(config, system, messages, stream=False)
+    return _openai_compat_chat(XAI_URL, headers, body, "xAI")
+
+
+def _stream_xai(config, system, messages, on_chunk):
+    headers, body = _xai_request_parts(config, system, messages, stream=True)
+    return _openai_compat_stream(XAI_URL, headers, body, "xAI", on_chunk)
+
+
+def _custom_url(config):
+    """Full chat/completions URL from the user's base endpoint.
+
+    Tolerates a trailing slash and an endpoint that already points at
+    /chat/completions. Empty endpoint -> a friendly configuration error.
+    """
+    endpoint = (config.get("custom", {}).get("endpoint") or "").strip()
+    if not endpoint:
+        raise RuntimeError(
+            "No Custom endpoint set. Set the base URL (e.g. "
+            "https://api.example.com/v1) in the AI Reviewer settings."
+        )
+    endpoint = endpoint.rstrip("/")
+    if endpoint.endswith("/chat/completions"):
+        return endpoint
+    return endpoint + "/chat/completions"
+
+
+def _custom_request_parts(config, system, messages, stream):
+    """Request parts for a user-configured OpenAI-compatible endpoint.
+
+    The API key is optional: a self-hosted server may need no auth. The model
+    has no default, so an empty one is a friendly configuration error.
+    """
+    model = (config.get("custom", {}).get("model") or "").strip()
+    if not model:
+        raise RuntimeError(
+            "No Custom model set. Set the model name in the AI Reviewer settings."
+        )
+    api_key = custom_api_key()
+    return _openai_compat_request_parts(api_key, model, system, messages, stream)
+
+
+def _chat_custom(config, system, messages):
+    url = _custom_url(config)
+    headers, body = _custom_request_parts(config, system, messages, stream=False)
+    return _openai_compat_chat(url, headers, body, "Custom")
+
+
+def _stream_custom(config, system, messages, on_chunk):
+    url = _custom_url(config)
+    headers, body = _custom_request_parts(config, system, messages, stream=True)
+    return _openai_compat_stream(url, headers, body, "Custom", on_chunk)

@@ -36,6 +36,7 @@ FILES=(
   "config_dialog.py"
   "conversations.py"
   "config.json"
+  "config.md"
   "manifest.json"
   "LICENSE"
 )
@@ -45,7 +46,16 @@ DIRS=(
 )
 
 # --- Version (read from manifest.json) ----------------------------------------
-VERSION="$(python3 -c "import json,sys; print(json.load(open('manifest.json')).get('human_version') or json.load(open('manifest.json')).get('version') or '0.0.0')" 2>/dev/null || echo "0.0.0")"
+# Like PACKAGE/NAME below, fail loudly on a broken manifest.json rather than
+# silently building a "0.0.0" archive.
+VERSION="$(python3 -c "
+import json
+m = json.load(open('manifest.json'))
+v = m.get('human_version') or m.get('version')
+if not v:
+    raise SystemExit('manifest.json has no human_version/version')
+print(v)
+")"
 PACKAGE="$(python3 -c "import json; print(json.load(open('manifest.json'))['package'])")"
 NAME="$(python3 -c "import json; print(json.load(open('manifest.json'))['name'])")"
 # Output filename is a slug of the display name (folder/package stays $PACKAGE).

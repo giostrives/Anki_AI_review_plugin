@@ -8,8 +8,8 @@ import os
 from aqt import mw
 from aqt.qt import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                     QLineEdit, QPushButton, QListWidget, QGroupBox,
-                    QFormLayout, QComboBox, QFileDialog, QTabWidget,
-                    QWidget, Qt)
+                    QFormLayout, QComboBox, QFileDialog, QFont, QTabWidget,
+                    QStackedWidget, QWidget, Qt)
 from aqt.utils import showInfo, tooltip
 
 from . import providers
@@ -18,6 +18,21 @@ from . import provider_models
 # Dropdown order for the provider combo box; index <-> config name.
 _PROVIDERS = provider_models.PROVIDERS
 _PROVIDER_LABELS = [provider_models.PROVIDER_LABELS[p] for p in _PROVIDERS]
+
+# Last entry of every model combo: selecting it clears the field so the user
+# can type any model name by hand. Never saved as a model (see save_and_close).
+_TYPE_YOUR_OWN = "Insert model name…"
+
+# Cloud providers that share one panel shape (model combo + API key) and one
+# persistence path. Value is the model used to prefill an unset config; order
+# matches config.json. Ollama (no key) and custom (base URL) are handled apart.
+_CLOUD_DEFAULT_MODELS = {
+    "gemini": "gemini-3.5-flash",
+    "nvidia": "deepseek-ai/deepseek-v4-flash",
+    "cerebras": "gpt-oss-120b",
+    "openai": "gpt-5.1",
+    "xai": "grok-4",
+}
 
 
 def get_config():
@@ -58,7 +73,7 @@ class ConfigDialog(QDialog):
     def setup_ui(self):
         self.setWindowTitle("AI Language Tutor Settings")
         self.setMinimumWidth(600)
-        self.setMinimumHeight(560)
+        self.setMinimumHeight(460)
 
         layout = QVBoxLayout()
 
@@ -94,8 +109,8 @@ class ConfigDialog(QDialog):
         self.provider_select = QComboBox()
         self.provider_select.addItems(_PROVIDER_LABELS)
         provider = self.config.get("provider", "ollama")
-        self.provider_select.setCurrentIndex(
-            _PROVIDERS.index(provider) if provider in _PROVIDERS else 0)
+        current = _PROVIDERS.index(provider) if provider in _PROVIDERS else 0
+        self.provider_select.setCurrentIndex(current)
         provider_layout.addRow("Use:", self.provider_select)
 
         # Fallback: when the primary provider errors, try the others (ones
@@ -109,99 +124,143 @@ class ConfigDialog(QDialog):
         provider_group.setLayout(provider_layout)
         layout.addWidget(provider_group)
 
-        # Ollama settings
-        ollama_cfg = self.config.get("ollama", {})
-        ollama_group = QGroupBox("Ollama Settings")
-        ollama_layout = QFormLayout()
-        self.endpoint_input = QLineEdit(
-            ollama_cfg.get("endpoint") or self.config.get("ollama_endpoint", "http://localhost:11434"))
-        ollama_layout.addRow("Endpoint:", self.endpoint_input)
-        self.model_input = self._make_model_combo(
-            "ollama", ollama_cfg.get("model") or self.config.get("model", "gemma4"))
-        ollama_layout.addRow("Model:", self.model_input)
-        ollama_group.setLayout(ollama_layout)
-        layout.addWidget(ollama_group)
-
-        # Gemini settings
-        gemini_cfg = self.config.get("gemini", {})
-        gemini_group = QGroupBox("Gemini Settings")
-        gemini_layout = QFormLayout()
-        self.gemini_model_input = self._make_model_combo(
-            "gemini", gemini_cfg.get("model", "gemini-3.5-flash"))
-        gemini_layout.addRow("Model:", self.gemini_model_input)
-
-        self.gemini_key_input = QLineEdit(providers.gemini_api_key())
-        self.gemini_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.gemini_key_input.setPlaceholderText("Paste your Gemini API key")
-        gemini_layout.addRow("API Key:", self.gemini_key_input)
-
-        delete_key_btn = QPushButton("Delete API Key")
-        delete_key_btn.clicked.connect(self.delete_gemini_key)
-        gemini_layout.addRow("", delete_key_btn)
-
-        gemini_layout.addRow(QLabel("Stored in the add-on's .env; removed when you uninstall the add-on."))
-        gemini_group.setLayout(gemini_layout)
-        layout.addWidget(gemini_group)
-
-        # NVIDIA settings
-        nvidia_cfg = self.config.get("nvidia", {})
-        nvidia_group = QGroupBox("NVIDIA Settings")
-        nvidia_layout = QFormLayout()
-        self.nvidia_model_input = self._make_model_combo(
-            "nvidia", nvidia_cfg.get("model", "deepseek-ai/deepseek-v4-flash"))
-        nvidia_layout.addRow("Model:", self.nvidia_model_input)
-
-        self.nvidia_key_input = QLineEdit(providers.nvidia_api_key())
-        self.nvidia_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.nvidia_key_input.setPlaceholderText("Paste your NVIDIA API key")
-        nvidia_layout.addRow("API Key:", self.nvidia_key_input)
-
-        delete_nvidia_key_btn = QPushButton("Delete API Key")
-        delete_nvidia_key_btn.clicked.connect(self.delete_nvidia_key)
-        nvidia_layout.addRow("", delete_nvidia_key_btn)
-
-        nvidia_layout.addRow(QLabel("Stored in the add-on's .env; removed when you uninstall the add-on."))
-        nvidia_group.setLayout(nvidia_layout)
-        layout.addWidget(nvidia_group)
-
-        # Cerebras settings
-        cerebras_cfg = self.config.get("cerebras", {})
-        cerebras_group = QGroupBox("Cerebras Settings")
-        cerebras_layout = QFormLayout()
-        self.cerebras_model_input = self._make_model_combo(
-            "cerebras", cerebras_cfg.get("model", "gpt-oss-120b"))
-        cerebras_layout.addRow("Model:", self.cerebras_model_input)
-
-        self.cerebras_key_input = QLineEdit(providers.cerebras_api_key())
-        self.cerebras_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.cerebras_key_input.setPlaceholderText("Paste your Cerebras API key")
-        cerebras_layout.addRow("API Key:", self.cerebras_key_input)
-
-        delete_cerebras_key_btn = QPushButton("Delete API Key")
-        delete_cerebras_key_btn.clicked.connect(self.delete_cerebras_key)
-        cerebras_layout.addRow("", delete_cerebras_key_btn)
-
-        cerebras_layout.addRow(QLabel("Stored in the add-on's .env; removed when you uninstall the add-on."))
-        cerebras_group.setLayout(cerebras_layout)
-        layout.addWidget(cerebras_group)
+        # One settings page per provider, only the selected one visible. Every
+        # page's widgets stay alive though, so save_and_close persists them all
+        # — including a key typed while briefly switched to another provider.
+        self.model_inputs = {}
+        self.key_inputs = {}
+        self.provider_stack = QStackedWidget()
+        for name in _PROVIDERS:
+            if name == "ollama":
+                page = self._build_ollama_panel()
+            elif name == "custom":
+                page = self._build_custom_panel()
+            else:
+                page = self._build_cloud_panel(name)
+            self.provider_stack.addWidget(page)
+        self.provider_stack.setCurrentIndex(current)
+        self.provider_select.currentIndexChanged.connect(
+            self.provider_stack.setCurrentIndex)
+        layout.addWidget(self.provider_stack)
 
         layout.addStretch()
         tab.setLayout(layout)
         return tab
 
+    def _build_ollama_panel(self):
+        """Local Ollama: endpoint + model, no API key."""
+        ollama_cfg = self.config.get("ollama", {})
+        group = QGroupBox("Ollama Settings")
+        form = QFormLayout()
+        self.endpoint_input = QLineEdit(
+            ollama_cfg.get("endpoint") or self.config.get("ollama_endpoint", "http://localhost:11434"))
+        form.addRow("Endpoint:", self.endpoint_input)
+        self.model_inputs["ollama"] = self._make_model_combo(
+            "ollama", ollama_cfg.get("model") or self.config.get("model", "gemma4"))
+        form.addRow("Model:", self.model_inputs["ollama"])
+        group.setLayout(form)
+        return group
+
+    def _build_cloud_panel(self, name):
+        """A key-based cloud provider (Gemini/NVIDIA/Cerebras/OpenAI/xAI):
+        model combo + API key + delete button. All identical bar names."""
+        label = provider_models.PROVIDER_LABELS[name]
+        cfg = self.config.get(name, {})
+        group = QGroupBox(f"{label} Settings")
+        form = QFormLayout()
+
+        self.model_inputs[name] = self._make_model_combo(
+            name, cfg.get("model", _CLOUD_DEFAULT_MODELS[name]))
+        form.addRow("Model:", self.model_inputs[name])
+
+        key_input = QLineEdit(getattr(providers, f"{name}_api_key")())
+        key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        key_input.setPlaceholderText(f"Paste your {label} API key")
+        self.key_inputs[name] = key_input
+        form.addRow("API Key:", key_input)
+
+        delete_btn = QPushButton("Delete API Key")
+        delete_btn.clicked.connect(lambda _=False, n=name: self._delete_key(n))
+        form.addRow("", delete_btn)
+
+        form.addRow(QLabel("Stored in the add-on's .env; removed when you uninstall the add-on."))
+        group.setLayout(form)
+        return group
+
+    def _build_custom_panel(self):
+        """User-configured OpenAI-compatible endpoint: base URL, model, and an
+        optional API key (a self-hosted server may need no auth)."""
+        cfg = self.config.get("custom", {})
+        group = QGroupBox("Custom (OpenAI-compatible) Settings")
+        form = QFormLayout()
+
+        self.custom_endpoint_input = QLineEdit(cfg.get("endpoint", ""))
+        self.custom_endpoint_input.setPlaceholderText("https://api.example.com/v1")
+        form.addRow("Base URL:", self.custom_endpoint_input)
+
+        # Plain field, not a combo: there is no known model list for custom.
+        self.custom_model_input = QLineEdit(cfg.get("model", ""))
+        self.custom_model_input.setPlaceholderText("Insert model name")
+        form.addRow("Model:", self.custom_model_input)
+
+        key_input = QLineEdit(providers.custom_api_key())
+        key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        key_input.setPlaceholderText("Paste your API key (optional)")
+        self.key_inputs["custom"] = key_input
+        form.addRow("API Key (optional):", key_input)
+
+        delete_btn = QPushButton("Delete API Key")
+        delete_btn.clicked.connect(lambda _=False: self._delete_key("custom"))
+        form.addRow("", delete_btn)
+
+        note = QLabel(
+            "Works with any API that speaks the OpenAI chat/completions format "
+            "(e.g. LM Studio, vLLM, OpenRouter). Compatibility is not guaranteed. "
+            "The API key is stored in the add-on's .env; removed when you "
+            "uninstall the add-on.")
+        note.setWordWrap(True)
+        form.addRow(note)
+        group.setLayout(form)
+        return group
+
     @staticmethod
     def _make_model_combo(provider, current_value):
         """Editable combo box seeded with known models for `provider`, prefilled
-        with `current_value` (which may be a custom string not in the list)."""
+        with `current_value` (which may be a custom string not in the list).
+
+        The list ends with an italic "Insert model name…" entry: picking it
+        empties the field and focuses it, making the type-anything ability of
+        the editable combo discoverable."""
         combo = QComboBox()
         combo.addItems(provider_models.MODEL_OPTIONS[provider])
+        combo.addItem(_TYPE_YOUR_OWN)
+        italic = QFont()
+        italic.setItalic(True)
+        combo.setItemData(combo.count() - 1, italic, Qt.ItemDataRole.FontRole)
         combo.setEditable(True)
+        # Hint shown when the model field is emptied out.
+        combo.lineEdit().setPlaceholderText("Insert model name")
         idx = combo.findText(current_value)
         if idx >= 0:
             combo.setCurrentIndex(idx)
         else:
             combo.setEditText(current_value)
+
+        def on_activated(index):
+            if combo.itemText(index) == _TYPE_YOUR_OWN:
+                combo.clearEditText()
+                combo.lineEdit().setFocus()
+
+        combo.activated.connect(on_activated)
         return combo
+
+    def _model_text(self, name, default):
+        """A model combo's text, falling back to `default` when the user left
+        it empty or on the "Insert model name…" prompt entry."""
+        text = self.model_inputs[name].currentText().strip()
+        if not text or text == _TYPE_YOUR_OWN:
+            return default
+        return text
 
     def _build_general_tab(self):
         """Appearance, logging, and per-deck configuration."""
@@ -365,23 +424,11 @@ class ConfigDialog(QDialog):
         if path:
             self.log_dir_input.setText(path)
 
-    def delete_gemini_key(self):
-        """Clear the stored Gemini API key from .env and the input field"""
-        providers.delete_gemini_api_key()
-        self.gemini_key_input.setText("")
-        tooltip("Gemini API key deleted")
-
-    def delete_nvidia_key(self):
-        """Clear the stored NVIDIA API key from .env and the input field"""
-        providers.delete_nvidia_api_key()
-        self.nvidia_key_input.setText("")
-        tooltip("NVIDIA API key deleted")
-
-    def delete_cerebras_key(self):
-        """Clear the stored Cerebras API key from .env and the input field"""
-        providers.delete_cerebras_api_key()
-        self.cerebras_key_input.setText("")
-        tooltip("Cerebras API key deleted")
+    def _delete_key(self, name):
+        """Clear a provider's stored API key from .env and its input field."""
+        getattr(providers, f"delete_{name}_api_key")()
+        self.key_inputs[name].setText("")
+        tooltip(f"{provider_models.PROVIDER_LABELS[name]} API key deleted")
 
     def save_deck_config(self):
         """Save configuration for currently selected deck"""
@@ -397,6 +444,7 @@ class ConfigDialog(QDialog):
             return
 
         self._store_deck_config(deck_name)
+        save_config(self.config)
 
         tooltip(f"Configuration saved for {deck_name}")
         # Reflect "Apply to subdecks" immediately: collapse newly covered subdecks.
@@ -439,23 +487,23 @@ class ConfigDialog(QDialog):
             if self.fallback_select.currentIndex() == 1 else [])
         self.config["ollama"] = {
             "endpoint": self.endpoint_input.text(),
-            "model": self.model_input.currentText(),
+            "model": self._model_text("ollama", "gemma4"),
         }
-        self.config["gemini"] = {
-            "model": self.gemini_model_input.currentText(),
+        # Cloud key-based providers: model goes in the config, the API key in
+        # .env (removed on uninstall, never in the config). Every provider is
+        # saved regardless of which one is currently selected.
+        for name in _CLOUD_DEFAULT_MODELS:
+            self.config[name] = {
+                "model": self._model_text(name, _CLOUD_DEFAULT_MODELS[name])}
+            getattr(providers, f"set_{name}_api_key")(
+                self.key_inputs[name].text().strip())
+        self.config["custom"] = {
+            "endpoint": self.custom_endpoint_input.text().strip(),
+            "model": self.custom_model_input.text().strip(),
         }
-        self.config["nvidia"] = {
-            "model": self.nvidia_model_input.currentText(),
-        }
-        self.config["cerebras"] = {
-            "model": self.cerebras_model_input.currentText(),
-        }
+        providers.set_custom_api_key(self.key_inputs["custom"].text().strip())
         self.config["logging_enabled"] = self.logging_enabled.currentIndex() == 1
         self.config["conversations_dir"] = self.log_dir_input.text().strip()
-        # API keys are stored in .env (removed on uninstall), never in the config.
-        providers.set_gemini_api_key(self.gemini_key_input.text().strip())
-        providers.set_nvidia_api_key(self.nvidia_key_input.text().strip())
-        providers.set_cerebras_api_key(self.cerebras_key_input.text().strip())
         # Drop the obsolete flat keys if present.
         self.config.pop("ollama_endpoint", None)
         self.config.pop("model", None)

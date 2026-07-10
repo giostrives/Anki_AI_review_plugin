@@ -13,6 +13,9 @@ def env_in_tmp(providers_mod, tmp_path, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.delenv("CEREBRAS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.delenv("CUSTOM_API_KEY", raising=False)
     return tmp_path
 
 
@@ -68,6 +71,24 @@ class TestEnvFile:
         providers_mod.delete_cerebras_api_key()
         assert providers_mod.cerebras_api_key() == ""
 
+    def test_openai_key_roundtrip(self, providers_mod, env_in_tmp):
+        providers_mod.set_openai_api_key("oa-123")
+        assert providers_mod.openai_api_key() == "oa-123"
+        providers_mod.delete_openai_api_key()
+        assert providers_mod.openai_api_key() == ""
+
+    def test_xai_key_roundtrip(self, providers_mod, env_in_tmp):
+        providers_mod.set_xai_api_key("xai-123")
+        assert providers_mod.xai_api_key() == "xai-123"
+        providers_mod.delete_xai_api_key()
+        assert providers_mod.xai_api_key() == ""
+
+    def test_custom_key_roundtrip(self, providers_mod, env_in_tmp):
+        providers_mod.set_custom_api_key("cu-123")
+        assert providers_mod.custom_api_key() == "cu-123"
+        providers_mod.delete_custom_api_key()
+        assert providers_mod.custom_api_key() == ""
+
 
 class TestDispatch:
     def test_chat_routes_by_provider(self, providers_mod, monkeypatch):
@@ -80,12 +101,22 @@ class TestDispatch:
                             lambda *a: calls.append("nvidia"))
         monkeypatch.setattr(providers_mod, "_chat_cerebras",
                             lambda *a: calls.append("cerebras"))
+        monkeypatch.setattr(providers_mod, "_chat_openai",
+                            lambda *a: calls.append("openai"))
+        monkeypatch.setattr(providers_mod, "_chat_xai",
+                            lambda *a: calls.append("xai"))
+        monkeypatch.setattr(providers_mod, "_chat_custom",
+                            lambda *a: calls.append("custom"))
         providers_mod.chat_llm({"provider": "gemini"}, "sys", [])
         providers_mod.chat_llm({"provider": "ollama"}, "sys", [])
         providers_mod.chat_llm({"provider": "nvidia"}, "sys", [])
         providers_mod.chat_llm({"provider": "cerebras"}, "sys", [])
+        providers_mod.chat_llm({"provider": "openai"}, "sys", [])
+        providers_mod.chat_llm({"provider": "xai"}, "sys", [])
+        providers_mod.chat_llm({"provider": "custom"}, "sys", [])
         providers_mod.chat_llm({}, "sys", [])  # default is ollama
-        assert calls == ["gemini", "ollama", "nvidia", "cerebras", "ollama"]
+        assert calls == ["gemini", "ollama", "nvidia", "cerebras",
+                         "openai", "xai", "custom", "ollama"]
 
     def test_stream_routes_by_provider(self, providers_mod, monkeypatch):
         calls = []
@@ -97,11 +128,21 @@ class TestDispatch:
                             lambda *a: calls.append("nvidia"))
         monkeypatch.setattr(providers_mod, "_stream_cerebras",
                             lambda *a: calls.append("cerebras"))
+        monkeypatch.setattr(providers_mod, "_stream_openai",
+                            lambda *a: calls.append("openai"))
+        monkeypatch.setattr(providers_mod, "_stream_xai",
+                            lambda *a: calls.append("xai"))
+        monkeypatch.setattr(providers_mod, "_stream_custom",
+                            lambda *a: calls.append("custom"))
         providers_mod.stream_llm({"provider": "gemini"}, "s", [], None)
         providers_mod.stream_llm({"provider": "nvidia"}, "s", [], None)
         providers_mod.stream_llm({"provider": "cerebras"}, "s", [], None)
+        providers_mod.stream_llm({"provider": "openai"}, "s", [], None)
+        providers_mod.stream_llm({"provider": "xai"}, "s", [], None)
+        providers_mod.stream_llm({"provider": "custom"}, "s", [], None)
         providers_mod.stream_llm({}, "s", [], None)
-        assert calls == ["gemini", "nvidia", "cerebras", "ollama"]
+        assert calls == ["gemini", "nvidia", "cerebras",
+                         "openai", "xai", "custom", "ollama"]
 
     def test_gemini_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No Gemini API key"):
@@ -376,16 +417,202 @@ class TestCerebrasRequest:
             providers_mod._stream_cerebras({}, None, [], lambda d: None)
 
 
+class TestOpenAIRequest:
+    def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_openai_api_key("oa-k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(url=url, headers=headers, body=json)
+            return FakeResponse(200, {
+                "choices": [{"message": {"role": "assistant", "content": "ok!"}}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        reply = providers_mod._chat_openai(
+            {}, "be nice", [{"role": "user", "content": "hola"}])
+        assert reply == "ok!"
+        assert captured["url"] == "https://api.openai.com/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer oa-k"
+        body = captured["body"]
+        assert body["model"] == "gpt-5.1"  # default
+        assert body["stream"] is False
+        assert body["messages"][0] == {"role": "system", "content": "be nice"}
+        assert body["messages"][1]["content"] == "hola"
+
+    def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_openai_api_key("k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(body=json)
+            return FakeResponse(200, {"choices": [{"message": {"content": "x"}}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        providers_mod._chat_openai({"openai": {"model": "gpt-5-mini"}}, None, [])
+        assert captured["body"]["model"] == "gpt-5-mini"
+
+    def test_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
+        with pytest.raises(RuntimeError, match="No OpenAI API key"):
+            providers_mod._chat_openai({}, "sys", [])
+
+
+class TestXaiRequest:
+    def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_xai_api_key("xai-k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(url=url, headers=headers, body=json)
+            return FakeResponse(200, {
+                "choices": [{"message": {"role": "assistant", "content": "ok!"}}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        reply = providers_mod._chat_xai(
+            {}, "be nice", [{"role": "user", "content": "hola"}])
+        assert reply == "ok!"
+        assert captured["url"] == "https://api.x.ai/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer xai-k"
+        body = captured["body"]
+        assert body["model"] == "grok-4"  # default
+        assert body["stream"] is False
+        assert body["messages"][0] == {"role": "system", "content": "be nice"}
+
+    def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_xai_api_key("k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(body=json)
+            return FakeResponse(200, {"choices": [{"message": {"content": "x"}}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        providers_mod._chat_xai({"xai": {"model": "grok-3-mini"}}, None, [])
+        assert captured["body"]["model"] == "grok-3-mini"
+
+    def test_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
+        with pytest.raises(RuntimeError, match="No xAI API key"):
+            providers_mod._chat_xai({}, "sys", [])
+
+
+class TestCustomRequest:
+    def _fake(self, providers_mod, monkeypatch, captured):
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(url=url, headers=headers, body=json)
+            return FakeResponse(200, {"choices": [{"message": {"content": "ok!"}}]})
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+
+    def test_url_joining_from_base(self, providers_mod, env_in_tmp, monkeypatch):
+        captured = {}
+        self._fake(providers_mod, monkeypatch, captured)
+        providers_mod._chat_custom(
+            {"custom": {"endpoint": "https://api.example.com/v1", "model": "m"}},
+            None, [])
+        assert captured["url"] == "https://api.example.com/v1/chat/completions"
+
+    def test_url_joining_tolerates_trailing_slash(self, providers_mod, env_in_tmp, monkeypatch):
+        captured = {}
+        self._fake(providers_mod, monkeypatch, captured)
+        providers_mod._chat_custom(
+            {"custom": {"endpoint": "https://api.example.com/v1/", "model": "m"}},
+            None, [])
+        assert captured["url"] == "https://api.example.com/v1/chat/completions"
+
+    def test_url_already_ends_in_chat_completions(self, providers_mod, env_in_tmp, monkeypatch):
+        captured = {}
+        self._fake(providers_mod, monkeypatch, captured)
+        providers_mod._chat_custom(
+            {"custom": {"endpoint": "https://api.example.com/v1/chat/completions",
+                        "model": "m"}},
+            None, [])
+        assert captured["url"] == "https://api.example.com/v1/chat/completions"
+
+    def test_auth_header_present_with_key(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_custom_api_key("cu-k")
+        captured = {}
+        self._fake(providers_mod, monkeypatch, captured)
+        providers_mod._chat_custom(
+            {"custom": {"endpoint": "https://api.example.com/v1", "model": "m"}},
+            None, [])
+        assert captured["headers"]["Authorization"] == "Bearer cu-k"
+
+    def test_auth_header_absent_without_key(self, providers_mod, env_in_tmp, monkeypatch):
+        captured = {}
+        self._fake(providers_mod, monkeypatch, captured)
+        providers_mod._chat_custom(
+            {"custom": {"endpoint": "https://api.example.com/v1", "model": "m"}},
+            None, [])
+        assert "Authorization" not in captured["headers"]
+
+    def test_empty_endpoint_raises(self, providers_mod, env_in_tmp):
+        with pytest.raises(RuntimeError, match="endpoint"):
+            providers_mod._chat_custom({"custom": {"endpoint": "", "model": "m"}}, None, [])
+
+    def test_empty_model_raises(self, providers_mod, env_in_tmp):
+        with pytest.raises(RuntimeError, match="model"):
+            providers_mod._chat_custom(
+                {"custom": {"endpoint": "https://api.example.com/v1", "model": ""}},
+                None, [])
+
+    def test_stream_uses_joined_url(self, providers_mod, env_in_tmp, monkeypatch):
+        def sse(delta):
+            return ("data: " + json.dumps({"choices": [{"delta": delta}]})).encode()
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
+            captured.update(url=url)
+            return FakeResponse(200, lines=[sse({"content": "Ho"}),
+                                            sse({"content": "la"}), b"data: [DONE]"])
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        chunks = []
+        reply = providers_mod._stream_custom(
+            {"custom": {"endpoint": "https://api.example.com/v1/", "model": "m"}},
+            None, [], chunks.append)
+        assert reply == "Hola"
+        assert captured["url"] == "https://api.example.com/v1/chat/completions"
+
+
+class TestIsConfigured:
+    def test_openai_needs_key(self, providers_mod, env_in_tmp):
+        assert providers_mod._is_configured("openai", {}) is False
+        providers_mod.set_openai_api_key("k")
+        assert providers_mod._is_configured("openai", {}) is True
+
+    def test_xai_needs_key(self, providers_mod, env_in_tmp):
+        assert providers_mod._is_configured("xai", {}) is False
+        providers_mod.set_xai_api_key("k")
+        assert providers_mod._is_configured("xai", {}) is True
+
+    def test_custom_needs_endpoint_not_key(self, providers_mod, env_in_tmp):
+        assert providers_mod._is_configured("custom", {}) is False
+        assert providers_mod._is_configured(
+            "custom", {"custom": {"endpoint": "   "}}) is False
+        assert providers_mod._is_configured(
+            "custom", {"custom": {"endpoint": "https://api.example.com/v1"}}) is True
+
+    def test_ollama_always_configured(self, providers_mod, env_in_tmp):
+        assert providers_mod._is_configured("ollama", {}) is True
+
+
 class TestProviderModels:
     def test_every_provider_has_labels_and_models(self, provider_models_mod):
         for provider in provider_models_mod.PROVIDERS:
             assert provider in provider_models_mod.PROVIDER_LABELS
             assert provider_models_mod.PROVIDER_LABELS[provider]
             assert provider in provider_models_mod.MODEL_OPTIONS
-            assert len(provider_models_mod.MODEL_OPTIONS[provider]) > 0
+            # "custom" is a free-form provider: the user types the model name,
+            # so it ships with no preset list.
+            if provider != "custom":
+                assert len(provider_models_mod.MODEL_OPTIONS[provider]) > 0
 
     def test_cerebras_is_registered(self, provider_models_mod):
         assert "cerebras" in provider_models_mod.PROVIDERS
+
+    def test_new_providers_registered(self, provider_models_mod):
+        for provider in ("openai", "xai", "custom"):
+            assert provider in provider_models_mod.PROVIDERS
+            assert provider in provider_models_mod.PROVIDER_LABELS
+            assert provider in provider_models_mod.MODEL_OPTIONS
 
 
 class TestFallback:

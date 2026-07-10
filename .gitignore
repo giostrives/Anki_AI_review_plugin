@@ -213,6 +213,7 @@ __marimo__/
 .idea
 .DS_Store
 .claude
+CLAUDE.md
 
 # Add-on build artifacts (produced by build_ankiaddon.sh)
 build/

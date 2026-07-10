@@ -14,6 +14,16 @@
   "cerebras": {
     "model": "gpt-oss-120b"
   },
+  "openai": {
+    "model": "gpt-5.1"
+  },
+  "xai": {
+    "model": "grok-4"
+  },
+  "custom": {
+    "endpoint": "",
+    "model": ""
+  },
   "fallback_providers": [],
   "logging_enabled": false,
   "conversations_dir": "",
