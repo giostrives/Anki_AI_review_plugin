@@ -20,6 +20,9 @@
   "xai": {
     "model": "grok-4"
   },
+  "anthropic": {
+    "model": "claude-haiku-4-5"
+  },
   "custom": {
     "endpoint": "",
     "model": ""

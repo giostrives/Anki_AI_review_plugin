@@ -2,7 +2,9 @@
 LLM provider abstraction.
 
 Supports several backends, selected by config["provider"]:
-  - "ollama": local Ollama server via its /api/chat HTTP endpoint.
+  - "ollama": the Local LLM provider — any server speaking the Ollama
+    /api/chat protocol, at a configurable endpoint (defaults to a local
+    Ollama install).
   - "gemini": Google Gemini via its REST v1beta generateContent endpoint.
   - "nvidia": NVIDIA API Catalog via its OpenAI-compatible chat/completions
     endpoint.
@@ -10,6 +12,7 @@ Supports several backends, selected by config["provider"]:
     endpoint.
   - "openai": OpenAI chat/completions.
   - "xai": xAI (Grok) chat/completions.
+  - "anthropic": Anthropic (Claude) via its Messages REST API.
   - "custom": any user-configured OpenAI-compatible chat/completions endpoint.
 
 NVIDIA, Cerebras, OpenAI, xAI and "custom" share one OpenAI-compatible client
@@ -155,6 +158,20 @@ def delete_xai_api_key():
     set_xai_api_key("")
 
 
+def anthropic_api_key():
+    """Return the Anthropic API key from `.env` (or env var), or empty string."""
+    return _get_api_key("ANTHROPIC_API_KEY")
+
+
+def set_anthropic_api_key(key):
+    return _set_api_key("ANTHROPIC_API_KEY", key)
+
+
+def delete_anthropic_api_key():
+    """Remove the stored Anthropic API key (clears it in `.env`)."""
+    set_anthropic_api_key("")
+
+
 def custom_api_key():
     """Return the Custom-provider API key from `.env` (or env var), or "".
 
@@ -195,6 +212,8 @@ def chat_llm(config, system, messages):
         return _chat_openai(config, system, messages)
     if provider == "xai":
         return _chat_xai(config, system, messages)
+    if provider == "anthropic":
+        return _chat_anthropic(config, system, messages)
     if provider == "custom":
         return _chat_custom(config, system, messages)
     return _chat_ollama(config, system, messages)
@@ -224,6 +243,8 @@ def stream_llm(config, system, messages, on_chunk):
         return _stream_openai(config, system, messages, on_chunk)
     if provider == "xai":
         return _stream_xai(config, system, messages, on_chunk)
+    if provider == "anthropic":
+        return _stream_anthropic(config, system, messages, on_chunk)
     if provider == "custom":
         return _stream_custom(config, system, messages, on_chunk)
     return _stream_ollama(config, system, messages, on_chunk)
@@ -260,6 +281,8 @@ def _is_configured(name, config):
         return bool(openai_api_key())
     if name == "xai":
         return bool(xai_api_key())
+    if name == "anthropic":
+        return bool(anthropic_api_key())
     if name == "custom":
         return bool((config.get("custom", {}).get("endpoint") or "").strip())
     return True
@@ -345,11 +368,11 @@ def _chat_ollama(config, system, messages):
         return response.json()["message"]["content"]
     except requests.exceptions.ConnectionError:
         raise RuntimeError(
-            f"Could not connect to Ollama at {endpoint}.\n"
-            "Make sure it is running with: ollama serve"
+            f"Could not connect to the local LLM server at {endpoint} — is it "
+            "running? (for Ollama: ollama serve)"
         )
     except Exception as e:
-        raise RuntimeError(f"Ollama error: {e}")
+        raise RuntimeError(f"Local LLM error: {e}")
 
 
 def _chat_gemini(config, system, messages):
@@ -435,13 +458,13 @@ def _stream_ollama(config, system, messages, on_chunk):
                     break
     except requests.exceptions.ConnectionError:
         raise RuntimeError(
-            f"Could not connect to Ollama at {endpoint}.\n"
-            "Make sure it is running with: ollama serve"
+            f"Could not connect to the local LLM server at {endpoint} — is it "
+            "running? (for Ollama: ollama serve)"
         )
     except RuntimeError:
         raise
     except Exception as e:
-        raise RuntimeError(f"Ollama error: {e}")
+        raise RuntimeError(f"Local LLM error: {e}")
     return "".join(parts)
 
 
@@ -719,6 +742,116 @@ def _chat_xai(config, system, messages):
 def _stream_xai(config, system, messages, on_chunk):
     headers, body = _xai_request_parts(config, system, messages, stream=True)
     return _openai_compat_stream(XAI_URL, headers, body, "xAI", on_chunk)
+
+
+# --- Anthropic (Claude) -------------------------------------------------------
+#
+# Anthropic speaks its own Messages API, not the OpenAI dialect: auth is an
+# `x-api-key` header (plus a pinned `anthropic-version`), the system prompt is
+# a top-level field, `max_tokens` is required, the reply comes as a list of
+# typed content blocks, and streaming is SSE with `content_block_delta`
+# events. Error bodies use the same {"error": {"message": ...}} envelope as
+# the OpenAI-compatible providers, so `_openai_compat_error` is reused.
+
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+
+
+def _anthropic_request_parts(config, system, messages, stream):
+    """Shared auth check + Messages API request body for the Anthropic API."""
+    api_key = anthropic_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "No Anthropic API key found. Set it in the AI Reviewer settings "
+            "(or add ANTHROPIC_API_KEY to the add-on's .env file)."
+        )
+
+    model = config.get("anthropic", {}).get("model", "claude-haiku-4-5")
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+    }
+    body = {
+        "model": model,
+        "max_tokens": 16384,
+        "messages": messages,
+        "stream": stream,
+    }
+    if system:
+        body["system"] = system
+    return headers, body
+
+
+def _chat_anthropic(config, system, messages):
+    headers, body = _anthropic_request_parts(config, system, messages, stream=False)
+    try:
+        response = requests.post(ANTHROPIC_URL, headers=headers, json=body,
+                                 timeout=120)
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            "Could not reach the Anthropic API. Check your internet connection.")
+
+    if response.status_code != 200:
+        raise _openai_compat_error(response, "Anthropic")
+
+    data = response.json()
+    # Thinking-capable models may interleave other block types; keep the text.
+    text = "".join(
+        block.get("text", "")
+        for block in data.get("content", [])
+        if block.get("type") == "text"
+    )
+    if not text:
+        raise RuntimeError(
+            f"Anthropic returned no usable text. Response: {str(data)[:200]}")
+    return text
+
+
+def _stream_anthropic(config, system, messages, on_chunk):
+    headers, body = _anthropic_request_parts(config, system, messages, stream=True)
+    parts = []
+    try:
+        with requests.post(
+            ANTHROPIC_URL,
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=120,
+        ) as response:
+            if response.status_code != 200:
+                raise _openai_compat_error(response, "Anthropic")
+            for raw in response.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                if not line.startswith("data:"):
+                    continue
+                payload = line[len("data:"):].strip()
+                if not payload:
+                    continue
+                try:
+                    obj = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                kind = obj.get("type")
+                if kind == "content_block_delta":
+                    delta_obj = obj.get("delta", {})
+                    if delta_obj.get("type") == "text_delta":
+                        delta = delta_obj.get("text", "")
+                        if delta:
+                            parts.append(delta)
+                            on_chunk(delta)
+                elif kind == "error":
+                    detail = obj.get("error", {}).get("message", "")
+                    raise RuntimeError(f"Anthropic API error: {detail}")
+                elif kind == "message_stop":
+                    break
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            "Could not reach the Anthropic API. Check your internet connection.")
+    if not parts:
+        raise RuntimeError("Anthropic returned no usable text.")
+    return "".join(parts)
 
 
 def _custom_url(config):

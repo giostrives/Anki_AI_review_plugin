@@ -19,7 +19,7 @@ from aqt.reviewer import Reviewer
 from aqt.utils import tooltip
 from aqt.webview import WebContent
 
-from . import conversations, providers
+from . import conversations, provider_models, providers
 from .config_dialog import get_config
 from .prompts import (conversation_prompt, language_card_prompt,
                       quick_card_prompt, system_prompt)
@@ -280,7 +280,8 @@ class AIReviewer:
             # Informational only: the review already succeeded, the user may
             # just want to know their primary provider needed a stand-in.
             if provider_used != config.get("provider", "ollama"):
-                tooltip(f"Primary AI provider failed — answered by {provider_used}",
+                label = provider_models.PROVIDER_LABELS.get(provider_used, provider_used)
+                tooltip(f"Primary AI provider failed — answered by {label}",
                         period=4000)
 
             # Never surface the model's chain-of-thought.
@@ -356,7 +357,8 @@ class AIReviewer:
                 return
 
             if provider_used != config.get("provider", "ollama"):
-                tooltip(f"Primary AI provider failed — answered by {provider_used}",
+                label = provider_models.PROVIDER_LABELS.get(provider_used, provider_used)
+                tooltip(f"Primary AI provider failed — answered by {label}",
                         period=4000)
 
             reply = self._strip_think(reply)
@@ -368,14 +370,10 @@ class AIReviewer:
     def _build_conv_meta(self, config, card_data, answer, mode, provider_used=None):
         # Log the provider that actually answered (may be a fallback).
         provider = provider_used or config.get("provider", "ollama")
-        if provider == "gemini":
-            model = config.get("gemini", {}).get("model", "")
-        elif provider == "nvidia":
-            model = config.get("nvidia", {}).get("model", "deepseek-ai/deepseek-v4-flash")
-        elif provider == "cerebras":
-            model = config.get("cerebras", {}).get("model", "gpt-oss-120b")
-        else:
+        if provider == "ollama":
             model = config.get("ollama", {}).get("model") or config.get("model", "gemma4")
+        else:
+            model = config.get(provider, {}).get("model", "")
         return {
             "id": uuid.uuid4().hex,
             "created": datetime.now().isoformat(timespec="seconds"),

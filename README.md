@@ -17,10 +17,11 @@ before you grade the card.
   turns as you like.
 - **Per-deck configuration** — each deck has its own language pair, user level, and
   default review style. Decks you don't enable behave like normal Anki cards.
-- **Four AI providers** — a local **Ollama** server, **Google Gemini**, the
-  **NVIDIA API catalog**, or **Cerebras**. Optionally, if your chosen provider fails
-  (server down, quota exceeded), the add-on can fall back to the others and tell you it
-  did so.
+- **Eight AI providers** — a local LLM server (**Local LLM (Ollama)** by default),
+  **Google Gemini**, the **NVIDIA API catalog**, **Cerebras**, **OpenAI**, **xAI (Grok)**,
+  **Anthropic (Claude)**, or any OpenAI-compatible endpoint via **Custom**. Optionally,
+  if your chosen provider fails (server down, quota exceeded), the add-on can fall back
+  to the others and tell you it did so.
 - Grading stays native: after the feedback the card flips and you use Anki's normal
   Again/Hard/Good/Easy buttons.
 
@@ -28,9 +29,10 @@ before you grade the card.
 
 - **Anki 2.1.55 or newer** (tested against Anki 25.9.x).
 - **One AI provider:**
-  - **Ollama** — a local LLM server. No API key, no account, nothing leaves your machine.
-    Install from [ollama.com](https://ollama.com) and pull a model
-    (e.g. `ollama pull gemma4`).
+  - **Local LLM (Ollama)** — a local LLM server. No API key, no account, nothing leaves
+    your machine. Install from [ollama.com](https://ollama.com) and pull a model
+    (e.g. `ollama pull gemma4`). Any server speaking Ollama's API protocol works; for
+    OpenAI-compatible local servers (LM Studio, vLLM, llama.cpp) use the Custom provider.
   - **Google Gemini** — needs an API key from
     [Google AI Studio](https://aistudio.google.com/apikey).
   - **NVIDIA API catalog** — needs an API key from
@@ -38,10 +40,19 @@ before you grade the card.
     Gemma, and GPT-OSS.
   - **Cerebras** — needs an API key from [cloud.cerebras.ai](https://cloud.cerebras.ai);
     serves GPT-OSS and Gemma at very high inference speed.
+  - **OpenAI** — needs an API key from
+    [platform.openai.com](https://platform.openai.com/api-keys).
+  - **xAI (Grok)** — needs an API key from [console.x.ai](https://console.x.ai).
+  - **Anthropic (Claude)** — needs an API key from
+    [platform.claude.com](https://platform.claude.com).
+  - **Custom** — any OpenAI-compatible chat/completions endpoint (LM Studio, vLLM,
+    OpenRouter, …): you supply the base URL and model name, plus an API key if the
+    server needs one.
 
-  All cloud providers have a free tier, which is generally enough for personal review
-  sessions. No extra Python packages are needed for any provider — everything runs over
-  plain HTTP with libraries Anki already bundles.
+  Gemini, NVIDIA, and Cerebras have free tiers, generally enough for personal review
+  sessions; OpenAI, xAI, and Anthropic are pay-as-you-go. No extra Python packages are
+  needed for any provider — everything runs over plain HTTP with libraries Anki
+  already bundles.
 
 ## Installation
 
@@ -55,16 +66,22 @@ Add-ons manager). The dialog has two tabs.
 
 ### AI Providers tab
 
-1. **Use** — pick **Ollama**, **Gemini**, **NVIDIA**, or **Cerebras**.
+1. **Use** — pick **Local LLM (Ollama)**, **Gemini**, **NVIDIA**, **Cerebras**,
+   **OpenAI**, **xAI (Grok)**, **Anthropic (Claude)**, or **Custom**.
 2. **If it fails, try** — **Nothing** (default) or **All other providers**. With fallback
    on, a failing provider is silently replaced by the next one that is configured
    (providers without an API key are skipped), and a small notice tells you which one
    actually answered.
-3. **Ollama Settings** — endpoint (default `http://localhost:11434`) and model
-   (default `gemma4`).
+3. **Local LLM (Ollama) Settings** — Server URL / endpoint (default
+   `http://localhost:11434`) and model (default `gemma4`).
 4. **Gemini Settings** — model (default `gemini-3.5-flash`) and your API key.
 5. **NVIDIA Settings** — model (default `deepseek-ai/deepseek-v4-flash`) and your API key.
 6. **Cerebras Settings** — model (default `gpt-oss-120b`) and your API key.
+7. **OpenAI Settings** — model (default `gpt-5.1`) and your API key.
+8. **xAI Settings** — model (default `grok-4`) and your API key.
+9. **Anthropic Settings** — model (default `claude-haiku-4-5`) and your API key.
+10. **Custom Settings** — base URL of any OpenAI-compatible endpoint, model name, and an
+    optional API key.
 
 Each **Model** field is a dropdown seeded with known-good models for that provider, but
 it's editable — click in and type any model name the provider supports, not just the
@@ -82,7 +99,7 @@ deleted along with the add-on if you uninstall it.
 2. **Logging** — off by default. When enabled, saves each review conversation to a local
    file (see [Conversation history](#conversation-history)).
 3. **Deck Configuration** — select a deck and set:
-   - **Source / Target language** — the language pair for that deck.
+   - **Source / Target language** — the language you speak / the language you're learning.
    - **First field holds** — whether the note's *first* field is the **word being
      learned** (default) or its **meaning/translation**. This tells the exercise and the
      model which word is which. Reversed cards ("Basic (and reversed)") are detected
@@ -131,11 +148,11 @@ Dependencies (`requirements.txt`): `anki`, `aqt`, `requests`, `Jinja2`.
 
 ### Providers
 
-All four providers are plain-HTTP clients in `providers.py`, built on `requests` (which
+All providers are plain-HTTP clients in `providers.py`, built on `requests` (which
 Anki bundles) — deliberately no vendor SDKs, since Anki's launcher can prune its Python
 environment on update, which makes vendored compiled packages fragile:
 
-- **Ollama** — `/api/chat`, streaming via NDJSON.
+- **Local LLM (Ollama)** — `/api/chat`, streaming via NDJSON.
 - **Gemini** — REST `v1beta` `generateContent` / `streamGenerateContent` (SSE).
 - **NVIDIA** — the OpenAI-compatible `/v1/chat/completions` endpoint at
   `integrate.api.nvidia.com` (SSE streaming). Requests ask DeepSeek-style models to skip
@@ -143,6 +160,12 @@ environment on update, which makes vendored compiled packages fragile:
   that arrives anyway is stripped before display.
 - **Cerebras** — the OpenAI-compatible `/v1/chat/completions` endpoint at
   `api.cerebras.ai` (SSE streaming).
+- **OpenAI** — `/v1/chat/completions` at `api.openai.com` (SSE streaming).
+- **xAI** — the OpenAI-compatible `/v1/chat/completions` endpoint at `api.x.ai`
+  (SSE streaming).
+- **Anthropic** — the Messages API at `api.anthropic.com/v1/messages`
+  (SSE streaming).
+- **Custom** — the same OpenAI-compatible client pointed at a user-supplied base URL.
 
 Provider errors are normalized to `RuntimeError` with user-readable messages.
 `provider_models.py` is the single source of truth for the provider list, display labels,

@@ -83,6 +83,12 @@ class TestEnvFile:
         providers_mod.delete_xai_api_key()
         assert providers_mod.xai_api_key() == ""
 
+    def test_anthropic_key_roundtrip(self, providers_mod, env_in_tmp):
+        providers_mod.set_anthropic_api_key("ant-123")
+        assert providers_mod.anthropic_api_key() == "ant-123"
+        providers_mod.delete_anthropic_api_key()
+        assert providers_mod.anthropic_api_key() == ""
+
     def test_custom_key_roundtrip(self, providers_mod, env_in_tmp):
         providers_mod.set_custom_api_key("cu-123")
         assert providers_mod.custom_api_key() == "cu-123"
@@ -105,6 +111,8 @@ class TestDispatch:
                             lambda *a: calls.append("openai"))
         monkeypatch.setattr(providers_mod, "_chat_xai",
                             lambda *a: calls.append("xai"))
+        monkeypatch.setattr(providers_mod, "_chat_anthropic",
+                            lambda *a: calls.append("anthropic"))
         monkeypatch.setattr(providers_mod, "_chat_custom",
                             lambda *a: calls.append("custom"))
         providers_mod.chat_llm({"provider": "gemini"}, "sys", [])
@@ -113,10 +121,11 @@ class TestDispatch:
         providers_mod.chat_llm({"provider": "cerebras"}, "sys", [])
         providers_mod.chat_llm({"provider": "openai"}, "sys", [])
         providers_mod.chat_llm({"provider": "xai"}, "sys", [])
+        providers_mod.chat_llm({"provider": "anthropic"}, "sys", [])
         providers_mod.chat_llm({"provider": "custom"}, "sys", [])
         providers_mod.chat_llm({}, "sys", [])  # default is ollama
         assert calls == ["gemini", "ollama", "nvidia", "cerebras",
-                         "openai", "xai", "custom", "ollama"]
+                         "openai", "xai", "anthropic", "custom", "ollama"]
 
     def test_stream_routes_by_provider(self, providers_mod, monkeypatch):
         calls = []
@@ -132,6 +141,8 @@ class TestDispatch:
                             lambda *a: calls.append("openai"))
         monkeypatch.setattr(providers_mod, "_stream_xai",
                             lambda *a: calls.append("xai"))
+        monkeypatch.setattr(providers_mod, "_stream_anthropic",
+                            lambda *a: calls.append("anthropic"))
         monkeypatch.setattr(providers_mod, "_stream_custom",
                             lambda *a: calls.append("custom"))
         providers_mod.stream_llm({"provider": "gemini"}, "s", [], None)
@@ -139,10 +150,11 @@ class TestDispatch:
         providers_mod.stream_llm({"provider": "cerebras"}, "s", [], None)
         providers_mod.stream_llm({"provider": "openai"}, "s", [], None)
         providers_mod.stream_llm({"provider": "xai"}, "s", [], None)
+        providers_mod.stream_llm({"provider": "anthropic"}, "s", [], None)
         providers_mod.stream_llm({"provider": "custom"}, "s", [], None)
         providers_mod.stream_llm({}, "s", [], None)
         assert calls == ["gemini", "nvidia", "cerebras",
-                         "openai", "xai", "custom", "ollama"]
+                         "openai", "xai", "anthropic", "custom", "ollama"]
 
     def test_gemini_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No Gemini API key"):
@@ -494,6 +506,111 @@ class TestXaiRequest:
             providers_mod._chat_xai({}, "sys", [])
 
 
+class TestAnthropicRequest:
+    def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_anthropic_api_key("ant-k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(url=url, headers=headers, body=json)
+            return FakeResponse(200, {
+                "content": [{"type": "text", "text": "ok!"}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        reply = providers_mod._chat_anthropic(
+            {}, "be nice", [{"role": "user", "content": "hola"}])
+        assert reply == "ok!"
+        assert captured["url"] == "https://api.anthropic.com/v1/messages"
+        assert captured["headers"]["x-api-key"] == "ant-k"
+        assert captured["headers"]["anthropic-version"] == "2023-06-01"
+        body = captured["body"]
+        assert body["model"] == "claude-haiku-4-5"  # default
+        assert body["stream"] is False
+        assert body["max_tokens"] > 0
+        # System prompt is a top-level field, not a chat message.
+        assert body["system"] == "be nice"
+        assert body["messages"] == [{"role": "user", "content": "hola"}]
+
+    def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_anthropic_api_key("k")
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(body=json)
+            return FakeResponse(200, {"content": [{"type": "text", "text": "x"}]})
+
+        monkeypatch.setattr(providers_mod.requests, "post", fake_post)
+        providers_mod._chat_anthropic(
+            {"anthropic": {"model": "claude-sonnet-5"}}, None, [])
+        assert captured["body"]["model"] == "claude-sonnet-5"
+
+    def test_non_text_blocks_are_skipped(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_anthropic_api_key("k")
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, {"content": [
+                                {"type": "thinking", "thinking": "hmm"},
+                                {"type": "text", "text": "Ho"},
+                                {"type": "text", "text": "la"},
+                            ]}))
+        assert providers_mod._chat_anthropic({}, None, []) == "Hola"
+
+    def test_empty_content_raises(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_anthropic_api_key("k")
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, {"content": []}))
+        with pytest.raises(RuntimeError, match="no usable text"):
+            providers_mod._chat_anthropic({}, None, [])
+
+    def test_api_error_surfaced(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_anthropic_api_key("k")
+        monkeypatch.setattr(
+            providers_mod.requests, "post",
+            lambda *a, **kw: FakeResponse(401, {"error": {"message": "bad key"}}))
+        with pytest.raises(RuntimeError, match=r"401.*bad key"):
+            providers_mod._chat_anthropic({}, None, [])
+
+    def test_sse_stream(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_anthropic_api_key("k")
+
+        def sse(obj):
+            return ("data: " + json.dumps(obj)).encode()
+
+        lines = [
+            b"event: message_start",
+            sse({"type": "message_start", "message": {}}),
+            sse({"type": "content_block_start", "index": 0,
+                 "content_block": {"type": "text", "text": ""}}),
+            sse({"type": "content_block_delta", "index": 0,
+                 "delta": {"type": "text_delta", "text": "Ho"}}),
+            sse({"type": "content_block_delta", "index": 0,
+                 "delta": {"type": "thinking_delta", "thinking": "..."}}),
+            sse({"type": "content_block_delta", "index": 0,
+                 "delta": {"type": "text_delta", "text": "la"}}),
+            sse({"type": "content_block_stop", "index": 0}),
+            sse({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+            sse({"type": "message_stop"}),
+        ]
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, lines=lines))
+        chunks = []
+        reply = providers_mod._stream_anthropic({}, None, [], chunks.append)
+        assert reply == "Hola"
+        assert chunks == ["Ho", "la"]
+
+    def test_stream_error_event_raises(self, providers_mod, env_in_tmp, monkeypatch):
+        providers_mod.set_anthropic_api_key("k")
+        lines = [("data: " + json.dumps(
+            {"type": "error", "error": {"message": "overloaded"}})).encode()]
+        monkeypatch.setattr(providers_mod.requests, "post",
+                            lambda *a, **kw: FakeResponse(200, lines=lines))
+        with pytest.raises(RuntimeError, match="overloaded"):
+            providers_mod._stream_anthropic({}, None, [], lambda d: None)
+
+    def test_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
+        with pytest.raises(RuntimeError, match="No Anthropic API key"):
+            providers_mod._chat_anthropic({}, "sys", [])
+
+
 class TestCustomRequest:
     def _fake(self, providers_mod, monkeypatch, captured):
         def fake_post(url, headers=None, json=None, timeout=None):
@@ -578,6 +695,11 @@ class TestIsConfigured:
         providers_mod.set_openai_api_key("k")
         assert providers_mod._is_configured("openai", {}) is True
 
+    def test_anthropic_needs_key(self, providers_mod, env_in_tmp):
+        assert providers_mod._is_configured("anthropic", {}) is False
+        providers_mod.set_anthropic_api_key("k")
+        assert providers_mod._is_configured("anthropic", {}) is True
+
     def test_xai_needs_key(self, providers_mod, env_in_tmp):
         assert providers_mod._is_configured("xai", {}) is False
         providers_mod.set_xai_api_key("k")
@@ -613,6 +735,15 @@ class TestProviderModels:
             assert provider in provider_models_mod.PROVIDERS
             assert provider in provider_models_mod.PROVIDER_LABELS
             assert provider in provider_models_mod.MODEL_OPTIONS
+
+    def test_ollama_is_labeled_local_llm(self, provider_models_mod):
+        assert "Local" in provider_models_mod.PROVIDER_LABELS["ollama"]
+
+    def test_local_endpoint_presets(self, provider_models_mod):
+        presets = provider_models_mod.LOCAL_ENDPOINT_PRESETS
+        assert presets
+        assert presets[0] == provider_models_mod.OLLAMA_DEFAULT_ENDPOINT
+        assert provider_models_mod.OLLAMA_DEFAULT_ENDPOINT == "http://localhost:11434"
 
 
 class TestFallback:

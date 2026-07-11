@@ -17,9 +17,12 @@ Two things before it does anything at all:
 1. **Turn it on per deck.** The add-on is off by default. In the settings you
    enable **AI Review** for each deck you want (optionally extending it to that
    deck's subdecks). Every other deck reviews exactly as normal Anki.
-2. **Give it an AI provider.** Either a local **Ollama** server (free, no
-   account, nothing leaves your machine) or an API key for **Google Gemini**,
-   the **NVIDIA API catalog**, or **Cerebras** — all of which have free tiers.
+2. **Give it an AI provider.** Either a local LLM server, **Local LLM
+   (Ollama)** by default (free, no account, nothing leaves your machine), or an
+   API key for a cloud provider — **Google Gemini**, the **NVIDIA API
+   catalog**, and **Cerebras** all have free tiers; **OpenAI**, **xAI (Grok)**,
+   **Anthropic (Claude)**, and any OpenAI-compatible endpoint (**Custom**)
+   also work.
 
 ## Features
 
@@ -34,20 +37,30 @@ Two things before it does anything at all:
 - **Native card + native grading** — your card renders exactly as usual (your
   template, styling, images) with the AI panel underneath, and you still grade
   with Anki's normal Again/Hard/Good/Easy buttons.
-- **Four AI providers** with optional automatic fallback — a local **Ollama**
-  server, **Google Gemini**, the **NVIDIA API catalog**, or **Cerebras**.
+- **Eight AI providers** with optional automatic fallback — a local LLM server
+  (**Local LLM (Ollama)** by default), **Google Gemini**, the **NVIDIA API
+  catalog**, **Cerebras**, **OpenAI**, **xAI (Grok)**, **Anthropic (Claude)**,
+  or any OpenAI-compatible endpoint (**Custom**).
 
 ## Requirements
 
 - **Anki 2.1.55 or newer** (tested on 25.9.x).
-- **One AI provider** — the free tiers of the cloud options are generally
-  enough for personal review sessions:
-  - **Ollama** — a local LLM server. No API key, nothing leaves your machine.
-    Install from ollama.com and pull a model (e.g. `ollama pull gemma4`).
+- **One AI provider** — the free tiers of Gemini, NVIDIA, and Cerebras are
+  generally enough for personal review sessions:
+  - **Local LLM (Ollama)** — a local LLM server. No API key, nothing leaves
+    your machine. Install from ollama.com and pull a model (e.g. `ollama pull
+    gemma4`). Any server speaking Ollama's API protocol works; for
+    OpenAI-compatible local servers (LM Studio, vLLM, llama.cpp) use the
+    Custom provider.
   - **Google Gemini** — API key from Google AI Studio.
   - **NVIDIA API catalog** — API key from build.nvidia.com (DeepSeek, Gemma,
     GPT-OSS, …).
   - **Cerebras** — API key from cloud.cerebras.ai (very fast GPT-OSS / Gemma).
+  - **OpenAI** — API key from platform.openai.com (pay-as-you-go).
+  - **xAI (Grok)** — API key from console.x.ai (pay-as-you-go).
+  - **Anthropic (Claude)** — API key from platform.claude.com (pay-as-you-go).
+  - **Custom** — any OpenAI-compatible endpoint (LM Studio, vLLM, OpenRouter,
+    …): base URL + model, API key optional.
 
 No extra Python packages are needed — everything runs over plain HTTP with
 libraries Anki already bundles.
@@ -68,7 +81,7 @@ you uninstall.
 theme; Polished is a custom design), toggle optional **Logging**, then per deck
 set:
 
-- **Source / Target language** for that deck.
+- **Source / Target language** — the language you speak / the language you're learning.
 - **First field holds** — whether the note's first field is the word being
   learned (default) or its meaning. Reversed cards are detected automatically.
 - **User level** (Beginner / Intermediate / Advanced).

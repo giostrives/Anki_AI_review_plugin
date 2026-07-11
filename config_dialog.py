@@ -32,6 +32,7 @@ _CLOUD_DEFAULT_MODELS = {
     "cerebras": "gpt-oss-120b",
     "openai": "gpt-5.1",
     "xai": "grok-4",
+    "anthropic": "claude-haiku-4-5",
 }
 
 
@@ -148,22 +149,39 @@ class ConfigDialog(QDialog):
         return tab
 
     def _build_ollama_panel(self):
-        """Local Ollama: endpoint + model, no API key."""
+        """Local Ollama: server URL + model, no API key."""
         ollama_cfg = self.config.get("ollama", {})
-        group = QGroupBox("Ollama Settings")
+        group = QGroupBox("Local LLM Settings")
         form = QFormLayout()
-        self.endpoint_input = QLineEdit(
-            ollama_cfg.get("endpoint") or self.config.get("ollama_endpoint", "http://localhost:11434"))
-        form.addRow("Endpoint:", self.endpoint_input)
+        endpoint = (ollama_cfg.get("endpoint")
+                    or self.config.get("ollama_endpoint", provider_models.OLLAMA_DEFAULT_ENDPOINT))
+        # Editable combo of known local server URLs; the saved value is added if
+        # it isn't a preset. Item text is the bare URL: picking it sets the field
+        # verbatim.
+        self.endpoint_input = QComboBox()
+        self.endpoint_input.setEditable(True)
+        self.endpoint_input.addItems(provider_models.LOCAL_ENDPOINT_PRESETS)
+        if self.endpoint_input.findText(endpoint) < 0:
+            self.endpoint_input.addItem(endpoint)
+        self.endpoint_input.setCurrentText(endpoint)
+        form.addRow("Server URL:", self.endpoint_input)
         self.model_inputs["ollama"] = self._make_model_combo(
             "ollama", ollama_cfg.get("model") or self.config.get("model", "gemma4"))
         form.addRow("Model:", self.model_inputs["ollama"])
+
+        note = QLabel(
+            "Any server exposing Ollama's API works here. For OpenAI-compatible "
+            "local servers (LM Studio, vLLM, llama.cpp) use the 'Custom' "
+            "provider instead.")
+        note.setWordWrap(True)
+        form.addRow(note)
         group.setLayout(form)
         return group
 
     def _build_cloud_panel(self, name):
-        """A key-based cloud provider (Gemini/NVIDIA/Cerebras/OpenAI/xAI):
-        model combo + API key + delete button. All identical bar names."""
+        """A key-based cloud provider (Gemini/NVIDIA/Cerebras/OpenAI/xAI/
+        Anthropic): model combo + API key + delete button. All identical bar
+        names."""
         label = provider_models.PROVIDER_LABELS[name]
         cfg = self.config.get(name, {})
         group = QGroupBox(f"{label} Settings")
@@ -486,7 +504,7 @@ class ConfigDialog(QDialog):
             [p for p in _PROVIDERS if p != primary]
             if self.fallback_select.currentIndex() == 1 else [])
         self.config["ollama"] = {
-            "endpoint": self.endpoint_input.text(),
+            "endpoint": self.endpoint_input.currentText().strip(),
             "model": self._model_text("ollama", "gemma4"),
         }
         # Cloud key-based providers: model goes in the config, the API key in
