@@ -21,112 +21,45 @@ def env_in_tmp(providers_mod, tmp_path, monkeypatch):
 
 class TestEnvFile:
     def test_missing_env_file_means_no_key(self, providers_mod, env_in_tmp):
-        assert providers_mod.gemini_api_key() == ""
+        assert providers_mod.api_key("gemini") == ""
 
-    def test_set_then_read_key(self, providers_mod, env_in_tmp):
-        providers_mod.set_gemini_api_key("secret-123")
-        assert providers_mod.gemini_api_key() == "secret-123"
+    @pytest.mark.parametrize("provider", [
+        "gemini", "nvidia", "cerebras", "openai", "xai", "anthropic", "custom"])
+    def test_key_roundtrip(self, providers_mod, env_in_tmp, provider):
+        providers_mod.set_api_key(provider, "secret-123")
+        assert providers_mod.api_key(provider) == "secret-123"
+        providers_mod.delete_api_key(provider)
+        assert providers_mod.api_key(provider) == ""
 
     def test_set_preserves_other_lines_and_comments(self, providers_mod, env_in_tmp):
         (env_in_tmp / ".env").write_text(
             "# my settings\nOTHER=keep me\nGEMINI_API_KEY=old\n", encoding="utf-8")
-        providers_mod.set_gemini_api_key("new")
+        providers_mod.set_api_key("gemini", "new")
         content = (env_in_tmp / ".env").read_text(encoding="utf-8")
         assert "# my settings" in content
         assert "OTHER=keep me" in content
         assert content.count("GEMINI_API_KEY") == 1
-        assert providers_mod.gemini_api_key() == "new"
-
-    def test_delete_clears_key(self, providers_mod, env_in_tmp):
-        providers_mod.set_gemini_api_key("secret")
-        providers_mod.delete_gemini_api_key()
-        assert providers_mod.gemini_api_key() == ""
+        assert providers_mod.api_key("gemini") == "new"
 
     def test_quotes_are_stripped(self, providers_mod, env_in_tmp):
         (env_in_tmp / ".env").write_text('GEMINI_API_KEY="quoted"\n', encoding="utf-8")
-        assert providers_mod.gemini_api_key() == "quoted"
+        assert providers_mod.api_key("gemini") == "quoted"
 
     def test_env_var_fallback(self, providers_mod, env_in_tmp, monkeypatch):
         monkeypatch.setenv("GEMINI_API_KEY", "from-env")
-        assert providers_mod.gemini_api_key() == "from-env"
-
-    def test_nvidia_key_roundtrip(self, providers_mod, env_in_tmp):
-        providers_mod.set_nvidia_api_key("nv-123")
-        assert providers_mod.nvidia_api_key() == "nv-123"
-        providers_mod.delete_nvidia_api_key()
-        assert providers_mod.nvidia_api_key() == ""
+        assert providers_mod.api_key("gemini") == "from-env"
 
     def test_keys_coexist_in_one_env_file(self, providers_mod, env_in_tmp):
-        providers_mod.set_gemini_api_key("gm")
-        providers_mod.set_nvidia_api_key("nv")
-        assert providers_mod.gemini_api_key() == "gm"
-        assert providers_mod.nvidia_api_key() == "nv"
+        providers_mod.set_api_key("gemini", "gm")
+        providers_mod.set_api_key("nvidia", "nv")
+        assert providers_mod.api_key("gemini") == "gm"
+        assert providers_mod.api_key("nvidia") == "nv"
         # Rewriting one key must not clobber the other.
-        providers_mod.set_gemini_api_key("gm2")
-        assert providers_mod.nvidia_api_key() == "nv"
-
-    def test_cerebras_key_roundtrip(self, providers_mod, env_in_tmp):
-        providers_mod.set_cerebras_api_key("cb-123")
-        assert providers_mod.cerebras_api_key() == "cb-123"
-        providers_mod.delete_cerebras_api_key()
-        assert providers_mod.cerebras_api_key() == ""
-
-    def test_openai_key_roundtrip(self, providers_mod, env_in_tmp):
-        providers_mod.set_openai_api_key("oa-123")
-        assert providers_mod.openai_api_key() == "oa-123"
-        providers_mod.delete_openai_api_key()
-        assert providers_mod.openai_api_key() == ""
-
-    def test_xai_key_roundtrip(self, providers_mod, env_in_tmp):
-        providers_mod.set_xai_api_key("xai-123")
-        assert providers_mod.xai_api_key() == "xai-123"
-        providers_mod.delete_xai_api_key()
-        assert providers_mod.xai_api_key() == ""
-
-    def test_anthropic_key_roundtrip(self, providers_mod, env_in_tmp):
-        providers_mod.set_anthropic_api_key("ant-123")
-        assert providers_mod.anthropic_api_key() == "ant-123"
-        providers_mod.delete_anthropic_api_key()
-        assert providers_mod.anthropic_api_key() == ""
-
-    def test_custom_key_roundtrip(self, providers_mod, env_in_tmp):
-        providers_mod.set_custom_api_key("cu-123")
-        assert providers_mod.custom_api_key() == "cu-123"
-        providers_mod.delete_custom_api_key()
-        assert providers_mod.custom_api_key() == ""
+        providers_mod.set_api_key("gemini", "gm2")
+        assert providers_mod.api_key("nvidia") == "nv"
 
 
 class TestDispatch:
-    def test_chat_routes_by_provider(self, providers_mod, monkeypatch):
-        calls = []
-        monkeypatch.setattr(providers_mod, "_chat_ollama",
-                            lambda *a: calls.append("ollama"))
-        monkeypatch.setattr(providers_mod, "_chat_gemini",
-                            lambda *a: calls.append("gemini"))
-        monkeypatch.setattr(providers_mod, "_chat_nvidia",
-                            lambda *a: calls.append("nvidia"))
-        monkeypatch.setattr(providers_mod, "_chat_cerebras",
-                            lambda *a: calls.append("cerebras"))
-        monkeypatch.setattr(providers_mod, "_chat_openai",
-                            lambda *a: calls.append("openai"))
-        monkeypatch.setattr(providers_mod, "_chat_xai",
-                            lambda *a: calls.append("xai"))
-        monkeypatch.setattr(providers_mod, "_chat_anthropic",
-                            lambda *a: calls.append("anthropic"))
-        monkeypatch.setattr(providers_mod, "_chat_custom",
-                            lambda *a: calls.append("custom"))
-        providers_mod.chat_llm({"provider": "gemini"}, "sys", [])
-        providers_mod.chat_llm({"provider": "ollama"}, "sys", [])
-        providers_mod.chat_llm({"provider": "nvidia"}, "sys", [])
-        providers_mod.chat_llm({"provider": "cerebras"}, "sys", [])
-        providers_mod.chat_llm({"provider": "openai"}, "sys", [])
-        providers_mod.chat_llm({"provider": "xai"}, "sys", [])
-        providers_mod.chat_llm({"provider": "anthropic"}, "sys", [])
-        providers_mod.chat_llm({"provider": "custom"}, "sys", [])
-        providers_mod.chat_llm({}, "sys", [])  # default is ollama
-        assert calls == ["gemini", "ollama", "nvidia", "cerebras",
-                         "openai", "xai", "anthropic", "custom", "ollama"]
-
     def test_stream_routes_by_provider(self, providers_mod, monkeypatch):
         calls = []
         monkeypatch.setattr(providers_mod, "_stream_ollama",
@@ -158,15 +91,15 @@ class TestDispatch:
 
     def test_gemini_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No Gemini API key"):
-            providers_mod._chat_gemini({}, "sys", [])
+            providers_mod._stream_gemini({}, "sys", [], lambda d: None)
 
     def test_nvidia_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No NVIDIA API key"):
-            providers_mod._chat_nvidia({}, "sys", [])
+            providers_mod._stream_nvidia({}, "sys", [], lambda d: None)
 
     def test_cerebras_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No Cerebras API key"):
-            providers_mod._chat_cerebras({}, "sys", [])
+            providers_mod._stream_cerebras({}, "sys", [], lambda d: None)
 
 
 class FakeResponse:
@@ -197,36 +130,39 @@ class FakeResponse:
 
 class TestGeminiRequest:
     def test_roles_and_system_instruction(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_gemini_api_key("k")
+        providers_mod.set_api_key("gemini", "k")
         captured = {}
+        sse_line = ("data: " + json.dumps(
+            {"candidates": [{"content": {"parts": [{"text": "ok!"}]}}]})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(url=url, headers=headers, body=json)
-            return FakeResponse(200, {
-                "candidates": [{"content": {"parts": [{"text": "ok!"}]}}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        reply = providers_mod._chat_gemini(
+        chunks = []
+        reply = providers_mod._stream_gemini(
             {"gemini": {"model": "gemini-3.5-flash"}},
             "be nice",
             [{"role": "user", "content": "hola"},
              {"role": "assistant", "content": "¡hola!"},
              {"role": "user", "content": "¿qué tal?"}],
+            chunks.append,
         )
         assert reply == "ok!"
-        assert "gemini-3.5-flash:generateContent" in captured["url"]
+        assert "gemini-3.5-flash:streamGenerateContent" in captured["url"]
         assert captured["headers"]["x-goog-api-key"] == "k"
         # Anthropic-style "assistant" must become Gemini's "model" role.
         assert [c["role"] for c in captured["body"]["contents"]] == ["user", "model", "user"]
         assert captured["body"]["systemInstruction"]["parts"][0]["text"] == "be nice"
 
     def test_api_error_surfaces_google_message(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_gemini_api_key("k")
+        providers_mod.set_api_key("gemini", "k")
         monkeypatch.setattr(
             providers_mod.requests, "post",
             lambda *a, **kw: FakeResponse(429, {"error": {"message": "quota exceeded"}}))
         with pytest.raises(RuntimeError, match=r"429.*quota exceeded"):
-            providers_mod._chat_gemini({}, None, [])
+            providers_mod._stream_gemini({}, None, [], lambda d: None)
 
 
 class TestStreamParsing:
@@ -247,7 +183,7 @@ class TestStreamParsing:
         assert chunks == ["Hola", " mundo"]
 
     def test_gemini_sse_stream(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_gemini_api_key("k")
+        providers_mod.set_api_key("gemini", "k")
         def sse(text):
             return ("data: " + json.dumps(
                 {"candidates": [{"content": {"parts": [{"text": text}]}}]})).encode()
@@ -260,7 +196,7 @@ class TestStreamParsing:
         assert chunks == ["Ho", "la"]
 
     def test_gemini_empty_stream_raises(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_gemini_api_key("k")
+        providers_mod.set_api_key("gemini", "k")
         monkeypatch.setattr(providers_mod.requests, "post",
                             lambda *a, **kw: FakeResponse(200, lines=[]))
         with pytest.raises(RuntimeError, match="no usable text"):
@@ -269,17 +205,18 @@ class TestStreamParsing:
 
 class TestNvidiaRequest:
     def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_nvidia_api_key("nv-k")
+        providers_mod.set_api_key("nvidia", "nv-k")
         captured = {}
+        sse_line = ("data: " + json.dumps({"choices": [{"delta": {"content": "ok!"}}]})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(url=url, headers=headers, body=json)
-            return FakeResponse(200, {
-                "choices": [{"message": {"role": "assistant", "content": "ok!"}}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        reply = providers_mod._chat_nvidia(
-            {}, "be nice", [{"role": "user", "content": "hola"}])
+        chunks = []
+        reply = providers_mod._stream_nvidia(
+            {}, "be nice", [{"role": "user", "content": "hola"}], chunks.append)
         assert reply == "ok!"
         assert captured["url"] == "https://integrate.api.nvidia.com/v1/chat/completions"
         assert captured["headers"]["Authorization"] == "Bearer nv-k"
@@ -289,41 +226,35 @@ class TestNvidiaRequest:
         assert body["top_p"] == 0.95
         assert body["max_tokens"] == 16384
         assert body["chat_template_kwargs"] == {"thinking": False}
-        assert body["stream"] is False
+        assert body["stream"] is True
         # System prompt travels as a leading OpenAI-style system message.
         assert body["messages"][0] == {"role": "system", "content": "be nice"}
         assert body["messages"][1]["content"] == "hola"
 
     def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_nvidia_api_key("k")
+        providers_mod.set_api_key("nvidia", "k")
         captured = {}
+        sse_line = ("data: " + json.dumps({"choices": [{"delta": {"content": "x"}}]})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(body=json)
-            return FakeResponse(200, {"choices": [{"message": {"content": "x"}}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        providers_mod._chat_nvidia(
-            {"nvidia": {"model": "meta/llama-4"}}, None, [])
+        providers_mod._stream_nvidia(
+            {"nvidia": {"model": "meta/llama-4"}}, None, [], lambda d: None)
         assert captured["body"]["model"] == "meta/llama-4"
 
     def test_api_error_surfaces_message(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_nvidia_api_key("k")
+        providers_mod.set_api_key("nvidia", "k")
         monkeypatch.setattr(
             providers_mod.requests, "post",
             lambda *a, **kw: FakeResponse(402, {"error": {"message": "out of credits"}}))
         with pytest.raises(RuntimeError, match=r"402.*out of credits"):
-            providers_mod._chat_nvidia({}, None, [])
-
-    def test_malformed_body_raises(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_nvidia_api_key("k")
-        monkeypatch.setattr(providers_mod.requests, "post",
-                            lambda *a, **kw: FakeResponse(200, {"choices": []}))
-        with pytest.raises(RuntimeError, match="no usable text"):
-            providers_mod._chat_nvidia({}, None, [])
+            providers_mod._stream_nvidia({}, None, [], lambda d: None)
 
     def test_sse_stream(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_nvidia_api_key("k")
+        providers_mod.set_api_key("nvidia", "k")
 
         def sse(delta):
             return ("data: " + json.dumps({"choices": [{"delta": delta}]})).encode()
@@ -343,7 +274,7 @@ class TestNvidiaRequest:
         assert chunks == ["Ho", "la"]
 
     def test_empty_stream_raises(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_nvidia_api_key("k")
+        providers_mod.set_api_key("nvidia", "k")
         monkeypatch.setattr(providers_mod.requests, "post",
                             lambda *a, **kw: FakeResponse(200, lines=[b"data: [DONE]"]))
         with pytest.raises(RuntimeError, match="no usable text"):
@@ -352,57 +283,52 @@ class TestNvidiaRequest:
 
 class TestCerebrasRequest:
     def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_cerebras_api_key("cb-k")
+        providers_mod.set_api_key("cerebras", "cb-k")
         captured = {}
+        sse_line = ("data: " + json.dumps({"choices": [{"delta": {"content": "ok!"}}]})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(url=url, headers=headers, body=json)
-            return FakeResponse(200, {
-                "choices": [{"message": {"role": "assistant", "content": "ok!"}}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        reply = providers_mod._chat_cerebras(
-            {}, "be nice", [{"role": "user", "content": "hola"}])
+        chunks = []
+        reply = providers_mod._stream_cerebras(
+            {}, "be nice", [{"role": "user", "content": "hola"}], chunks.append)
         assert reply == "ok!"
         assert captured["url"] == "https://api.cerebras.ai/v1/chat/completions"
         assert captured["headers"]["Authorization"] == "Bearer cb-k"
         body = captured["body"]
         assert body["model"] == "gpt-oss-120b"  # default
-        assert body["stream"] is False
+        assert body["stream"] is True
         # System prompt travels as a leading OpenAI-style system message.
         assert body["messages"][0] == {"role": "system", "content": "be nice"}
         assert body["messages"][1]["content"] == "hola"
 
     def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_cerebras_api_key("k")
+        providers_mod.set_api_key("cerebras", "k")
         captured = {}
+        sse_line = ("data: " + json.dumps({"choices": [{"delta": {"content": "x"}}]})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(body=json)
-            return FakeResponse(200, {"choices": [{"message": {"content": "x"}}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        providers_mod._chat_cerebras(
-            {"cerebras": {"model": "gemma-4-31b"}}, None, [])
+        providers_mod._stream_cerebras(
+            {"cerebras": {"model": "gemma-4-31b"}}, None, [], lambda d: None)
         assert captured["body"]["model"] == "gemma-4-31b"
 
     def test_api_error_surfaces_message(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_cerebras_api_key("k")
+        providers_mod.set_api_key("cerebras", "k")
         monkeypatch.setattr(
             providers_mod.requests, "post",
             lambda *a, **kw: FakeResponse(402, {"error": {"message": "out of credits"}}))
         with pytest.raises(RuntimeError, match=r"402.*out of credits"):
-            providers_mod._chat_cerebras({}, None, [])
-
-    def test_malformed_body_raises(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_cerebras_api_key("k")
-        monkeypatch.setattr(providers_mod.requests, "post",
-                            lambda *a, **kw: FakeResponse(200, {"choices": []}))
-        with pytest.raises(RuntimeError, match="no usable text"):
-            providers_mod._chat_cerebras({}, None, [])
+            providers_mod._stream_cerebras({}, None, [], lambda d: None)
 
     def test_sse_stream(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_cerebras_api_key("k")
+        providers_mod.set_api_key("cerebras", "k")
 
         def sse(delta):
             return ("data: " + json.dumps({"choices": [{"delta": delta}]})).encode()
@@ -422,7 +348,7 @@ class TestCerebrasRequest:
         assert chunks == ["Ho", "la"]
 
     def test_empty_stream_raises(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_cerebras_api_key("k")
+        providers_mod.set_api_key("cerebras", "k")
         monkeypatch.setattr(providers_mod.requests, "post",
                             lambda *a, **kw: FakeResponse(200, lines=[b"data: [DONE]"]))
         with pytest.raises(RuntimeError, match="no usable text"):
@@ -431,146 +357,148 @@ class TestCerebrasRequest:
 
 class TestOpenAIRequest:
     def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_openai_api_key("oa-k")
+        providers_mod.set_api_key("openai", "oa-k")
         captured = {}
+        sse_line = ("data: " + json.dumps({"choices": [{"delta": {"content": "ok!"}}]})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(url=url, headers=headers, body=json)
-            return FakeResponse(200, {
-                "choices": [{"message": {"role": "assistant", "content": "ok!"}}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        reply = providers_mod._chat_openai(
-            {}, "be nice", [{"role": "user", "content": "hola"}])
+        chunks = []
+        reply = providers_mod._stream_openai(
+            {}, "be nice", [{"role": "user", "content": "hola"}], chunks.append)
         assert reply == "ok!"
         assert captured["url"] == "https://api.openai.com/v1/chat/completions"
         assert captured["headers"]["Authorization"] == "Bearer oa-k"
         body = captured["body"]
         assert body["model"] == "gpt-5.1"  # default
-        assert body["stream"] is False
+        assert body["stream"] is True
         assert body["messages"][0] == {"role": "system", "content": "be nice"}
         assert body["messages"][1]["content"] == "hola"
 
     def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_openai_api_key("k")
+        providers_mod.set_api_key("openai", "k")
         captured = {}
+        sse_line = ("data: " + json.dumps({"choices": [{"delta": {"content": "x"}}]})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(body=json)
-            return FakeResponse(200, {"choices": [{"message": {"content": "x"}}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        providers_mod._chat_openai({"openai": {"model": "gpt-5-mini"}}, None, [])
+        providers_mod._stream_openai(
+            {"openai": {"model": "gpt-5-mini"}}, None, [], lambda d: None)
         assert captured["body"]["model"] == "gpt-5-mini"
 
     def test_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No OpenAI API key"):
-            providers_mod._chat_openai({}, "sys", [])
+            providers_mod._stream_openai({}, "sys", [], lambda d: None)
 
 
 class TestXaiRequest:
     def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_xai_api_key("xai-k")
+        providers_mod.set_api_key("xai", "xai-k")
         captured = {}
+        sse_line = ("data: " + json.dumps({"choices": [{"delta": {"content": "ok!"}}]})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(url=url, headers=headers, body=json)
-            return FakeResponse(200, {
-                "choices": [{"message": {"role": "assistant", "content": "ok!"}}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        reply = providers_mod._chat_xai(
-            {}, "be nice", [{"role": "user", "content": "hola"}])
+        chunks = []
+        reply = providers_mod._stream_xai(
+            {}, "be nice", [{"role": "user", "content": "hola"}], chunks.append)
         assert reply == "ok!"
         assert captured["url"] == "https://api.x.ai/v1/chat/completions"
         assert captured["headers"]["Authorization"] == "Bearer xai-k"
         body = captured["body"]
         assert body["model"] == "grok-4"  # default
-        assert body["stream"] is False
+        assert body["stream"] is True
         assert body["messages"][0] == {"role": "system", "content": "be nice"}
 
     def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_xai_api_key("k")
+        providers_mod.set_api_key("xai", "k")
         captured = {}
+        sse_line = ("data: " + json.dumps({"choices": [{"delta": {"content": "x"}}]})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(body=json)
-            return FakeResponse(200, {"choices": [{"message": {"content": "x"}}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        providers_mod._chat_xai({"xai": {"model": "grok-3-mini"}}, None, [])
+        providers_mod._stream_xai(
+            {"xai": {"model": "grok-3-mini"}}, None, [], lambda d: None)
         assert captured["body"]["model"] == "grok-3-mini"
 
     def test_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No xAI API key"):
-            providers_mod._chat_xai({}, "sys", [])
+            providers_mod._stream_xai({}, "sys", [], lambda d: None)
 
 
 class TestAnthropicRequest:
     def test_request_shape_and_reply(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_anthropic_api_key("ant-k")
+        providers_mod.set_api_key("anthropic", "ant-k")
         captured = {}
+        sse_line = ("data: " + json.dumps({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "ok!"}})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(url=url, headers=headers, body=json)
-            return FakeResponse(200, {
-                "content": [{"type": "text", "text": "ok!"}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        reply = providers_mod._chat_anthropic(
-            {}, "be nice", [{"role": "user", "content": "hola"}])
+        chunks = []
+        reply = providers_mod._stream_anthropic(
+            {}, "be nice", [{"role": "user", "content": "hola"}], chunks.append)
         assert reply == "ok!"
         assert captured["url"] == "https://api.anthropic.com/v1/messages"
         assert captured["headers"]["x-api-key"] == "ant-k"
         assert captured["headers"]["anthropic-version"] == "2023-06-01"
         body = captured["body"]
         assert body["model"] == "claude-haiku-4-5"  # default
-        assert body["stream"] is False
+        assert body["stream"] is True
         assert body["max_tokens"] > 0
         # System prompt is a top-level field, not a chat message.
         assert body["system"] == "be nice"
         assert body["messages"] == [{"role": "user", "content": "hola"}]
 
     def test_model_from_config(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_anthropic_api_key("k")
+        providers_mod.set_api_key("anthropic", "k")
         captured = {}
+        sse_line = ("data: " + json.dumps({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "x"}})).encode()
 
-        def fake_post(url, headers=None, json=None, timeout=None):
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(body=json)
-            return FakeResponse(200, {"content": [{"type": "text", "text": "x"}]})
+            return FakeResponse(200, lines=[sse_line])
 
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
-        providers_mod._chat_anthropic(
-            {"anthropic": {"model": "claude-sonnet-5"}}, None, [])
+        providers_mod._stream_anthropic(
+            {"anthropic": {"model": "claude-sonnet-5"}}, None, [], lambda d: None)
         assert captured["body"]["model"] == "claude-sonnet-5"
 
-    def test_non_text_blocks_are_skipped(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_anthropic_api_key("k")
-        monkeypatch.setattr(providers_mod.requests, "post",
-                            lambda *a, **kw: FakeResponse(200, {"content": [
-                                {"type": "thinking", "thinking": "hmm"},
-                                {"type": "text", "text": "Ho"},
-                                {"type": "text", "text": "la"},
-                            ]}))
-        assert providers_mod._chat_anthropic({}, None, []) == "Hola"
-
     def test_empty_content_raises(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_anthropic_api_key("k")
+        providers_mod.set_api_key("anthropic", "k")
         monkeypatch.setattr(providers_mod.requests, "post",
-                            lambda *a, **kw: FakeResponse(200, {"content": []}))
+                            lambda *a, **kw: FakeResponse(200, lines=[]))
         with pytest.raises(RuntimeError, match="no usable text"):
-            providers_mod._chat_anthropic({}, None, [])
+            providers_mod._stream_anthropic({}, None, [], lambda d: None)
 
     def test_api_error_surfaced(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_anthropic_api_key("k")
+        providers_mod.set_api_key("anthropic", "k")
         monkeypatch.setattr(
             providers_mod.requests, "post",
             lambda *a, **kw: FakeResponse(401, {"error": {"message": "bad key"}}))
         with pytest.raises(RuntimeError, match=r"401.*bad key"):
-            providers_mod._chat_anthropic({}, None, [])
+            providers_mod._stream_anthropic({}, None, [], lambda d: None)
 
     def test_sse_stream(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_anthropic_api_key("k")
+        providers_mod.set_api_key("anthropic", "k")
 
         def sse(obj):
             return ("data: " + json.dumps(obj)).encode()
@@ -598,7 +526,7 @@ class TestAnthropicRequest:
         assert chunks == ["Ho", "la"]
 
     def test_stream_error_event_raises(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_anthropic_api_key("k")
+        providers_mod.set_api_key("anthropic", "k")
         lines = [("data: " + json.dumps(
             {"type": "error", "error": {"message": "overloaded"}})).encode()]
         monkeypatch.setattr(providers_mod.requests, "post",
@@ -608,67 +536,70 @@ class TestAnthropicRequest:
 
     def test_without_key_raises_friendly_error(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="No Anthropic API key"):
-            providers_mod._chat_anthropic({}, "sys", [])
+            providers_mod._stream_anthropic({}, "sys", [], lambda d: None)
 
 
 class TestCustomRequest:
     def _fake(self, providers_mod, monkeypatch, captured):
-        def fake_post(url, headers=None, json=None, timeout=None):
+        sse_line = ("data: " + json.dumps({"choices": [{"delta": {"content": "ok!"}}]})).encode()
+
+        def fake_post(url, headers=None, json=None, timeout=None, stream=None):
             captured.update(url=url, headers=headers, body=json)
-            return FakeResponse(200, {"choices": [{"message": {"content": "ok!"}}]})
+            return FakeResponse(200, lines=[sse_line])
         monkeypatch.setattr(providers_mod.requests, "post", fake_post)
 
     def test_url_joining_from_base(self, providers_mod, env_in_tmp, monkeypatch):
         captured = {}
         self._fake(providers_mod, monkeypatch, captured)
-        providers_mod._chat_custom(
+        providers_mod._stream_custom(
             {"custom": {"endpoint": "https://api.example.com/v1", "model": "m"}},
-            None, [])
+            None, [], lambda d: None)
         assert captured["url"] == "https://api.example.com/v1/chat/completions"
 
     def test_url_joining_tolerates_trailing_slash(self, providers_mod, env_in_tmp, monkeypatch):
         captured = {}
         self._fake(providers_mod, monkeypatch, captured)
-        providers_mod._chat_custom(
+        providers_mod._stream_custom(
             {"custom": {"endpoint": "https://api.example.com/v1/", "model": "m"}},
-            None, [])
+            None, [], lambda d: None)
         assert captured["url"] == "https://api.example.com/v1/chat/completions"
 
     def test_url_already_ends_in_chat_completions(self, providers_mod, env_in_tmp, monkeypatch):
         captured = {}
         self._fake(providers_mod, monkeypatch, captured)
-        providers_mod._chat_custom(
+        providers_mod._stream_custom(
             {"custom": {"endpoint": "https://api.example.com/v1/chat/completions",
                         "model": "m"}},
-            None, [])
+            None, [], lambda d: None)
         assert captured["url"] == "https://api.example.com/v1/chat/completions"
 
     def test_auth_header_present_with_key(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_custom_api_key("cu-k")
+        providers_mod.set_api_key("custom", "cu-k")
         captured = {}
         self._fake(providers_mod, monkeypatch, captured)
-        providers_mod._chat_custom(
+        providers_mod._stream_custom(
             {"custom": {"endpoint": "https://api.example.com/v1", "model": "m"}},
-            None, [])
+            None, [], lambda d: None)
         assert captured["headers"]["Authorization"] == "Bearer cu-k"
 
     def test_auth_header_absent_without_key(self, providers_mod, env_in_tmp, monkeypatch):
         captured = {}
         self._fake(providers_mod, monkeypatch, captured)
-        providers_mod._chat_custom(
+        providers_mod._stream_custom(
             {"custom": {"endpoint": "https://api.example.com/v1", "model": "m"}},
-            None, [])
+            None, [], lambda d: None)
         assert "Authorization" not in captured["headers"]
 
     def test_empty_endpoint_raises(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="endpoint"):
-            providers_mod._chat_custom({"custom": {"endpoint": "", "model": "m"}}, None, [])
+            providers_mod._stream_custom(
+                {"custom": {"endpoint": "", "model": "m"}}, None, [], lambda d: None)
 
     def test_empty_model_raises(self, providers_mod, env_in_tmp):
         with pytest.raises(RuntimeError, match="model"):
-            providers_mod._chat_custom(
+            providers_mod._stream_custom(
                 {"custom": {"endpoint": "https://api.example.com/v1", "model": ""}},
-                None, [])
+                None, [], lambda d: None)
 
     def test_stream_uses_joined_url(self, providers_mod, env_in_tmp, monkeypatch):
         def sse(delta):
@@ -692,17 +623,17 @@ class TestCustomRequest:
 class TestIsConfigured:
     def test_openai_needs_key(self, providers_mod, env_in_tmp):
         assert providers_mod._is_configured("openai", {}) is False
-        providers_mod.set_openai_api_key("k")
+        providers_mod.set_api_key("openai", "k")
         assert providers_mod._is_configured("openai", {}) is True
 
     def test_anthropic_needs_key(self, providers_mod, env_in_tmp):
         assert providers_mod._is_configured("anthropic", {}) is False
-        providers_mod.set_anthropic_api_key("k")
+        providers_mod.set_api_key("anthropic", "k")
         assert providers_mod._is_configured("anthropic", {}) is True
 
     def test_xai_needs_key(self, providers_mod, env_in_tmp):
         assert providers_mod._is_configured("xai", {}) is False
-        providers_mod.set_xai_api_key("k")
+        providers_mod.set_api_key("xai", "k")
         assert providers_mod._is_configured("xai", {}) is True
 
     def test_custom_needs_endpoint_not_key(self, providers_mod, env_in_tmp):
@@ -739,10 +670,7 @@ class TestProviderModels:
     def test_ollama_is_labeled_local_llm(self, provider_models_mod):
         assert "Local" in provider_models_mod.PROVIDER_LABELS["ollama"]
 
-    def test_local_endpoint_presets(self, provider_models_mod):
-        presets = provider_models_mod.LOCAL_ENDPOINT_PRESETS
-        assert presets
-        assert presets[0] == provider_models_mod.OLLAMA_DEFAULT_ENDPOINT
+    def test_local_default_endpoint(self, provider_models_mod):
         assert provider_models_mod.OLLAMA_DEFAULT_ENDPOINT == "http://localhost:11434"
 
 
@@ -758,52 +686,42 @@ class TestFallback:
     def test_no_fallback_passes_error_through_verbatim(self, providers_mod, monkeypatch):
         def boom(*a):
             raise RuntimeError("original ollama error")
-        monkeypatch.setattr(providers_mod, "_chat_ollama", boom)
+        monkeypatch.setattr(providers_mod, "_stream_ollama", boom)
         with pytest.raises(RuntimeError, match="^original ollama error$"):
-            providers_mod.chat_llm_with_fallback({}, "s", [])
-
-    def test_falls_back_to_next_provider(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_gemini_api_key("k")
-
-        def boom(*a):
-            raise RuntimeError("gemini down")
-        monkeypatch.setattr(providers_mod, "_chat_gemini", boom)
-        monkeypatch.setattr(providers_mod, "_chat_ollama", lambda *a: "saved!")
-        cfg = {"provider": "gemini", "fallback_providers": ["ollama"]}
-        assert providers_mod.chat_llm_with_fallback(cfg, "s", []) == ("saved!", "ollama")
+            providers_mod.stream_llm_with_fallback({}, "s", [], lambda d: None)
 
     def test_primary_success_reports_primary(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_gemini_api_key("k")
-        monkeypatch.setattr(providers_mod, "_chat_gemini", lambda *a: "hi")
+        providers_mod.set_api_key("gemini", "k")
+        monkeypatch.setattr(providers_mod, "_stream_gemini", lambda *a: "hi")
         cfg = {"provider": "gemini", "fallback_providers": ["ollama"]}
-        assert providers_mod.chat_llm_with_fallback(cfg, "s", []) == ("hi", "gemini")
+        assert providers_mod.stream_llm_with_fallback(cfg, "s", [], lambda d: None) == ("hi", "gemini")
 
     def test_unconfigured_provider_is_skipped(self, providers_mod, env_in_tmp, monkeypatch):
         # No NVIDIA key set: its backend must not even be called.
         def never(*a):
             raise AssertionError("nvidia backend called without a key")
-        monkeypatch.setattr(providers_mod, "_chat_nvidia", never)
+        monkeypatch.setattr(providers_mod, "_stream_nvidia", never)
 
         def boom(*a):
             raise RuntimeError("ollama down")
-        monkeypatch.setattr(providers_mod, "_chat_ollama", boom)
-        providers_mod.set_gemini_api_key("k")
-        monkeypatch.setattr(providers_mod, "_chat_gemini", lambda *a: "hi")
+        monkeypatch.setattr(providers_mod, "_stream_ollama", boom)
+        providers_mod.set_api_key("gemini", "k")
+        monkeypatch.setattr(providers_mod, "_stream_gemini", lambda *a: "hi")
         cfg = {"provider": "ollama", "fallback_providers": ["nvidia", "gemini"]}
-        assert providers_mod.chat_llm_with_fallback(cfg, "s", []) == ("hi", "gemini")
+        assert providers_mod.stream_llm_with_fallback(cfg, "s", [], lambda d: None) == ("hi", "gemini")
 
     def test_all_fail_aggregates_errors(self, providers_mod, env_in_tmp, monkeypatch):
-        providers_mod.set_gemini_api_key("k")
+        providers_mod.set_api_key("gemini", "k")
 
         def boom(msg):
             def f(*a):
                 raise RuntimeError(msg)
             return f
-        monkeypatch.setattr(providers_mod, "_chat_ollama", boom("no server"))
-        monkeypatch.setattr(providers_mod, "_chat_gemini", boom("quota"))
+        monkeypatch.setattr(providers_mod, "_stream_ollama", boom("no server"))
+        monkeypatch.setattr(providers_mod, "_stream_gemini", boom("quota"))
         cfg = {"provider": "ollama", "fallback_providers": ["gemini", "nvidia"]}
         with pytest.raises(RuntimeError) as exc:
-            providers_mod.chat_llm_with_fallback(cfg, "s", [])
+            providers_mod.stream_llm_with_fallback(cfg, "s", [], lambda d: None)
         text = str(exc.value)
         assert "All providers failed" in text
         assert "ollama: no server" in text
@@ -820,7 +738,7 @@ class TestFallback:
             on_chunk("la")
             return "Hola"
         monkeypatch.setattr(providers_mod, "_stream_gemini", ok)
-        monkeypatch.setattr(providers_mod, "gemini_api_key", lambda: "k")
+        monkeypatch.setattr(providers_mod, "api_key", lambda p: "k")
         cfg = {"provider": "ollama", "fallback_providers": ["gemini"]}
         chunks = []
         result = providers_mod.stream_llm_with_fallback(cfg, "s", [], chunks.append)
@@ -837,7 +755,7 @@ class TestFallback:
         def never(*a):
             raise AssertionError("fallback must not run after mid-stream output")
         monkeypatch.setattr(providers_mod, "_stream_gemini", never)
-        monkeypatch.setattr(providers_mod, "gemini_api_key", lambda: "k")
+        monkeypatch.setattr(providers_mod, "api_key", lambda p: "k")
         cfg = {"provider": "ollama", "fallback_providers": ["gemini"]}
         with pytest.raises(RuntimeError, match="connection reset"):
             providers_mod.stream_llm_with_fallback(cfg, "s", [], lambda d: None)

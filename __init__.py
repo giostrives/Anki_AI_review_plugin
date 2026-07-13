@@ -5,7 +5,6 @@ Adds an AI writing exercise + feedback panel to card reviews
 
 from aqt import mw, gui_hooks
 from aqt.qt import QAction
-from aqt.utils import showInfo, tooltip
 from .reviewer import AIReviewer
 from .config_dialog import show_config_dialog
 
@@ -19,14 +18,10 @@ def init_ai_reviewer():
     if ai_reviewer is None:
         ai_reviewer = AIReviewer()
 
-def show_config():
-    """Show configuration dialog"""
-    show_config_dialog()
-
 def setup_menu():
     """Add menu item to Anki"""
     action = QAction("AI Language Tutor Settings", mw)
-    action.triggered.connect(show_config)
+    action.triggered.connect(show_config_dialog)
     mw.form.menuTools.addAction(action)
 
 # mw is None when the module is imported outside a running Anki (e.g. by
@@ -37,7 +32,7 @@ if mw is not None:
 
     # Route the Add-ons manager's "Config" button to our real dialog instead of
     # the raw JSON editor, so every entry point lands on the same settings UI.
-    mw.addonManager.setConfigAction(__name__, show_config)
+    mw.addonManager.setConfigAction(__name__, show_config_dialog)
 
     # Initialize on profile load
     gui_hooks.profile_did_open.append(init_ai_reviewer)

@@ -5,7 +5,7 @@ Supports several backends, selected by config["provider"]:
   - "ollama": the Local LLM provider — any server speaking the Ollama
     /api/chat protocol, at a configurable endpoint (defaults to a local
     Ollama install).
-  - "gemini": Google Gemini via its REST v1beta generateContent endpoint.
+  - "gemini": Google Gemini via its REST v1beta streamGenerateContent endpoint.
   - "nvidia": NVIDIA API Catalog via its OpenAI-compatible chat/completions
     endpoint.
   - "cerebras": Cerebras Inference via its OpenAI-compatible chat/completions
@@ -88,140 +88,37 @@ def _set_api_key(name, key):
         f.writelines(lines)
 
 
-def gemini_api_key():
-    """Return the Gemini API key from `.env` (or env var), or empty string."""
-    return _get_api_key("GEMINI_API_KEY")
+def api_key(provider):
+    """Return `provider`'s API key from `.env` (or env var), or empty string.
 
-
-def set_gemini_api_key(key):
-    return _set_api_key("GEMINI_API_KEY", key)
-
-
-def delete_gemini_api_key():
-    """Remove the stored Gemini API key (clears it in `.env`)."""
-    set_gemini_api_key("")
-
-
-def nvidia_api_key():
-    """Return the NVIDIA API key from `.env` (or env var), or empty string."""
-    return _get_api_key("NVIDIA_API_KEY")
-
-
-def set_nvidia_api_key(key):
-    return _set_api_key("NVIDIA_API_KEY", key)
-
-
-def delete_nvidia_api_key():
-    """Remove the stored NVIDIA API key (clears it in `.env`)."""
-    set_nvidia_api_key("")
-
-
-def cerebras_api_key():
-    """Return the Cerebras API key from `.env` (or env var), or empty string."""
-    return _get_api_key("CEREBRAS_API_KEY")
-
-
-def set_cerebras_api_key(key):
-    return _set_api_key("CEREBRAS_API_KEY", key)
-
-
-def delete_cerebras_api_key():
-    """Remove the stored Cerebras API key (clears it in `.env`)."""
-    set_cerebras_api_key("")
-
-
-def openai_api_key():
-    """Return the OpenAI API key from `.env` (or env var), or empty string."""
-    return _get_api_key("OPENAI_API_KEY")
-
-
-def set_openai_api_key(key):
-    return _set_api_key("OPENAI_API_KEY", key)
-
-
-def delete_openai_api_key():
-    """Remove the stored OpenAI API key (clears it in `.env`)."""
-    set_openai_api_key("")
-
-
-def xai_api_key():
-    """Return the xAI API key from `.env` (or env var), or empty string."""
-    return _get_api_key("XAI_API_KEY")
-
-
-def set_xai_api_key(key):
-    return _set_api_key("XAI_API_KEY", key)
-
-
-def delete_xai_api_key():
-    """Remove the stored xAI API key (clears it in `.env`)."""
-    set_xai_api_key("")
-
-
-def anthropic_api_key():
-    """Return the Anthropic API key from `.env` (or env var), or empty string."""
-    return _get_api_key("ANTHROPIC_API_KEY")
-
-
-def set_anthropic_api_key(key):
-    return _set_api_key("ANTHROPIC_API_KEY", key)
-
-
-def delete_anthropic_api_key():
-    """Remove the stored Anthropic API key (clears it in `.env`)."""
-    set_anthropic_api_key("")
-
-
-def custom_api_key():
-    """Return the Custom-provider API key from `.env` (or env var), or "".
-
-    Optional for OpenAI-compatible custom endpoints: a self-hosted server may
-    require no auth at all.
+    Optional for the "custom" provider: a self-hosted OpenAI-compatible
+    endpoint may require no auth at all.
     """
-    return _get_api_key("CUSTOM_API_KEY")
+    return _get_api_key(f"{provider.upper()}_API_KEY")
 
 
-def set_custom_api_key(key):
-    return _set_api_key("CUSTOM_API_KEY", key)
+def set_api_key(provider, key):
+    return _set_api_key(f"{provider.upper()}_API_KEY", key)
 
 
-def delete_custom_api_key():
-    """Remove the stored Custom API key (clears it in `.env`)."""
-    set_custom_api_key("")
+def delete_api_key(provider):
+    """Remove the stored API key for `provider` (clears it in `.env`)."""
+    set_api_key(provider, "")
 
 
-def chat_llm(config, system, messages):
-    """Send a multi-turn conversation to the configured provider and return the
-    model's reply.
-
-    `messages` is a list of {"role": "user"|"assistant", "content": str} in
-    chronological order. Both providers are stateless, so the whole history is
-    resent on every call.
-
-    Raises RuntimeError with a user-friendly message on configuration or
-    connectivity problems.
-    """
-    provider = config.get("provider", "ollama")
-    if provider == "gemini":
-        return _chat_gemini(config, system, messages)
-    if provider == "nvidia":
-        return _chat_nvidia(config, system, messages)
-    if provider == "cerebras":
-        return _chat_cerebras(config, system, messages)
-    if provider == "openai":
-        return _chat_openai(config, system, messages)
-    if provider == "xai":
-        return _chat_xai(config, system, messages)
-    if provider == "anthropic":
-        return _chat_anthropic(config, system, messages)
-    if provider == "custom":
-        return _chat_custom(config, system, messages)
-    return _chat_ollama(config, system, messages)
-
-
-def call_llm(config, system, prompt):
-    """Single-turn convenience wrapper around `chat_llm`."""
-    return chat_llm(config, system, [{"role": "user", "content": prompt}])
+# Dispatch table for stream_llm. Values are thin lambdas (rather than the
+# `_stream_*` functions themselves) so that monkeypatching a `_stream_*` name
+# on the module — as the tests do — is honored: each lambda looks the name up
+# fresh at call time instead of freezing the function object at import time.
+_STREAMERS = {
+    "gemini": lambda *a: _stream_gemini(*a),
+    "nvidia": lambda *a: _stream_nvidia(*a),
+    "cerebras": lambda *a: _stream_cerebras(*a),
+    "openai": lambda *a: _stream_openai(*a),
+    "xai": lambda *a: _stream_xai(*a),
+    "anthropic": lambda *a: _stream_anthropic(*a),
+    "custom": lambda *a: _stream_custom(*a),
+}
 
 
 def stream_llm(config, system, messages, on_chunk):
@@ -233,21 +130,8 @@ def stream_llm(config, system, messages, on_chunk):
     thread.
     """
     provider = config.get("provider", "ollama")
-    if provider == "gemini":
-        return _stream_gemini(config, system, messages, on_chunk)
-    if provider == "nvidia":
-        return _stream_nvidia(config, system, messages, on_chunk)
-    if provider == "cerebras":
-        return _stream_cerebras(config, system, messages, on_chunk)
-    if provider == "openai":
-        return _stream_openai(config, system, messages, on_chunk)
-    if provider == "xai":
-        return _stream_xai(config, system, messages, on_chunk)
-    if provider == "anthropic":
-        return _stream_anthropic(config, system, messages, on_chunk)
-    if provider == "custom":
-        return _stream_custom(config, system, messages, on_chunk)
-    return _stream_ollama(config, system, messages, on_chunk)
+    streamer = _STREAMERS.get(provider, lambda *a: _stream_ollama(*a))
+    return streamer(config, system, messages, on_chunk)
 
 
 def _provider_chain(config):
@@ -271,32 +155,11 @@ def _is_configured(name, config):
     runtime failure the chain already handles by moving on. Custom needs a
     base URL but no key (auth is optional for self-hosted servers).
     """
-    if name == "gemini":
-        return bool(gemini_api_key())
-    if name == "nvidia":
-        return bool(nvidia_api_key())
-    if name == "cerebras":
-        return bool(cerebras_api_key())
-    if name == "openai":
-        return bool(openai_api_key())
-    if name == "xai":
-        return bool(xai_api_key())
-    if name == "anthropic":
-        return bool(anthropic_api_key())
+    if name == "ollama":
+        return True
     if name == "custom":
         return bool((config.get("custom", {}).get("endpoint") or "").strip())
-    return True
-
-
-def chat_llm_with_fallback(config, system, messages):
-    """Like `chat_llm`, but on failure tries the configured fallback providers
-    in order. Returns (reply, provider_used) so the caller can tell the user
-    when someone other than the primary answered.
-    """
-    return _run_with_fallback(
-        config,
-        lambda cfg: chat_llm(cfg, system, messages),
-    )
+    return bool(api_key(name))
 
 
 def stream_llm_with_fallback(config, system, messages, on_chunk):
@@ -321,7 +184,7 @@ def stream_llm_with_fallback(config, system, messages, on_chunk):
     return _run_with_fallback(config, call, midstream=emitted)
 
 
-def _run_with_fallback(config, call, midstream=None):
+def _run_with_fallback(config, call, midstream):
     """Try `call` once per provider in the chain; return (result, name)."""
     chain = _provider_chain(config)
     if len(chain) == 1:
@@ -336,92 +199,11 @@ def _run_with_fallback(config, call, midstream=None):
         try:
             return call({**config, "provider": name}), name
         except Exception as e:
-            if midstream is not None and midstream[0]:
+            if midstream[0]:
                 # Partial output already reached the UI; don't replay it.
                 raise
             failures.append(f"{name}: {e}")
     raise RuntimeError("All providers failed:\n" + "\n".join(failures))
-
-
-def _chat_ollama(config, system, messages):
-    # Backward compatible: fall back to the old flat config keys.
-    ollama = config.get("ollama", {})
-    endpoint = ollama.get("endpoint") or config.get("ollama_endpoint", "http://localhost:11434")
-    model = ollama.get("model") or config.get("model", "gemma4")
-
-    chat_messages = []
-    if system:
-        chat_messages.append({"role": "system", "content": system})
-    chat_messages.extend(messages)
-
-    try:
-        response = requests.post(
-            f"{endpoint}/api/chat",
-            json={
-                "model": model,
-                "messages": chat_messages,
-                "stream": False,
-            },
-            timeout=120,
-        )
-        response.raise_for_status()
-        return response.json()["message"]["content"]
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError(
-            f"Could not connect to the local LLM server at {endpoint} — is it "
-            "running? (for Ollama: ollama serve)"
-        )
-    except Exception as e:
-        raise RuntimeError(f"Local LLM error: {e}")
-
-
-def _chat_gemini(config, system, messages):
-    api_key = gemini_api_key()
-    if not api_key:
-        raise RuntimeError(
-            "No Gemini API key found. Set it in the AI Reviewer settings "
-            "(or add GEMINI_API_KEY to the add-on's .env file)."
-        )
-
-    model = config.get("gemini", {}).get("model", "gemini-3.5-flash")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-
-    # Gemini uses "model" for the assistant role; the system text goes separately.
-    contents = [
-        {
-            "role": "model" if m["role"] == "assistant" else "user",
-            "parts": [{"text": m["content"]}],
-        }
-        for m in messages
-    ]
-    body = {"contents": contents}
-    if system:
-        body["systemInstruction"] = {"parts": [{"text": system}]}
-
-    try:
-        response = requests.post(
-            url,
-            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-            json=body,
-            timeout=120,
-        )
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError("Could not reach the Gemini API. Check your internet connection.")
-
-    if response.status_code != 200:
-        # Surface Google's error message when present.
-        try:
-            detail = response.json().get("error", {}).get("message", "")
-        except Exception:
-            detail = response.text[:200]
-        raise RuntimeError(f"Gemini API error ({response.status_code}): {detail}")
-
-    data = response.json()
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError):
-        # e.g. blocked by a safety filter, or an empty candidate.
-        raise RuntimeError(f"Gemini returned no usable text. Response: {str(data)[:200]}")
 
 
 def _stream_ollama(config, system, messages, on_chunk):
@@ -468,9 +250,33 @@ def _stream_ollama(config, system, messages, on_chunk):
     return "".join(parts)
 
 
+def _sse_json(response):
+    """Yield parsed JSON objects from a `data:` Server-Sent-Events stream.
+
+    Shared by Gemini, the OpenAI-compatible providers, and Anthropic — they
+    all send SSE with a JSON payload per event. Skips blank/keep-alive lines,
+    non-`data:` lines (e.g. `: comment`), and the `[DONE]` sentinel some APIs
+    use to close the stream (Anthropic has no such sentinel, but checking for
+    it anyway is harmless there).
+    """
+    for raw in response.iter_lines():
+        if not raw:
+            continue
+        line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:"):].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            yield json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+
+
 def _stream_gemini(config, system, messages, on_chunk):
-    api_key = gemini_api_key()
-    if not api_key:
+    key = api_key("gemini")
+    if not key:
         raise RuntimeError(
             "No Gemini API key found. Set it in the AI Reviewer settings "
             "(or add GEMINI_API_KEY to the add-on's .env file)."
@@ -495,7 +301,7 @@ def _stream_gemini(config, system, messages, on_chunk):
     try:
         with requests.post(
             url,
-            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            headers={"x-goog-api-key": key, "Content-Type": "application/json"},
             json=body,
             stream=True,
             timeout=120,
@@ -506,19 +312,7 @@ def _stream_gemini(config, system, messages, on_chunk):
                 except Exception:
                     detail = response.text[:200]
                 raise RuntimeError(f"Gemini API error ({response.status_code}): {detail}")
-            for raw in response.iter_lines():
-                if not raw:
-                    continue
-                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                if not line.startswith("data:"):
-                    continue
-                payload = line[len("data:"):].strip()
-                if not payload or payload == "[DONE]":
-                    continue
-                try:
-                    obj = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
+            for obj in _sse_json(response):
                 try:
                     delta = obj["candidates"][0]["content"]["parts"][0]["text"]
                 except (KeyError, IndexError):
@@ -572,24 +366,6 @@ def _openai_compat_error(response, name):
     return RuntimeError(f"{name} API error ({response.status_code}): {detail}")
 
 
-def _openai_compat_chat(url, headers, body, name):
-    """Non-streaming chat/completions call against an OpenAI-compatible API."""
-    try:
-        response = requests.post(url, headers=headers, json=body, timeout=120)
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError(
-            f"Could not reach the {name} API. Check your internet connection.")
-
-    if response.status_code != 200:
-        raise _openai_compat_error(response, name)
-
-    data = response.json()
-    try:
-        return data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        raise RuntimeError(f"{name} returned no usable text. Response: {str(data)[:200]}")
-
-
 def _openai_compat_stream(url, headers, body, name, on_chunk):
     """Streaming chat/completions call against an OpenAI-compatible API."""
     parts = []
@@ -603,19 +379,7 @@ def _openai_compat_stream(url, headers, body, name, on_chunk):
         ) as response:
             if response.status_code != 200:
                 raise _openai_compat_error(response, name)
-            for raw in response.iter_lines():
-                if not raw:
-                    continue
-                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                if not line.startswith("data:"):
-                    continue
-                payload = line[len("data:"):].strip()
-                if not payload or payload == "[DONE]":
-                    continue
-                try:
-                    obj = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
+            for obj in _sse_json(response):
                 try:
                     delta = obj["choices"][0].get("delta", {}).get("content", "")
                 except (KeyError, IndexError, TypeError):
@@ -631,117 +395,58 @@ def _openai_compat_stream(url, headers, body, name, on_chunk):
     return "".join(parts)
 
 
-NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-
-
-def _nvidia_request_parts(config, system, messages, stream):
-    """Shared auth check + OpenAI-style request body for the NVIDIA API."""
-    api_key = nvidia_api_key()
-    if not api_key:
-        raise RuntimeError(
-            "No NVIDIA API key found. Set it in the AI Reviewer settings "
-            "(or add NVIDIA_API_KEY to the add-on's .env file)."
-        )
-
-    model = config.get("nvidia", {}).get("model", "deepseek-ai/deepseek-v4-flash")
-    return _openai_compat_request_parts(
-        api_key, model, system, messages, stream,
-        extra_body={
+# Table of OpenAI-compatible cloud providers: (url, default model, display
+# name for error messages, extra body fields beyond model/messages/stream).
+_OPENAI_COMPAT = {
+    "nvidia": (
+        "https://integrate.api.nvidia.com/v1/chat/completions",
+        "deepseek-ai/deepseek-v4-flash",
+        "NVIDIA",
+        {
             "temperature": 1,
             "top_p": 0.95,
             "max_tokens": 16384,
             # Ask DeepSeek-style models to skip chain-of-thought output.
             "chat_template_kwargs": {"thinking": False},
         },
-    )
+    ),
+    "cerebras": ("https://api.cerebras.ai/v1/chat/completions",
+                 "gpt-oss-120b", "Cerebras", None),
+    "openai": ("https://api.openai.com/v1/chat/completions",
+               "gpt-5.1", "OpenAI", None),
+    "xai": ("https://api.x.ai/v1/chat/completions", "grok-4", "xAI", None),
+}
 
 
-def _chat_nvidia(config, system, messages):
-    headers, body = _nvidia_request_parts(config, system, messages, stream=False)
-    return _openai_compat_chat(NVIDIA_URL, headers, body, "NVIDIA")
+def _stream_openai_compat(name, config, system, messages, on_chunk):
+    """Auth check, request build, and stream for a provider in `_OPENAI_COMPAT`."""
+    url, default_model, display, extra_body = _OPENAI_COMPAT[name]
+    key = api_key(name)
+    if not key:
+        raise RuntimeError(
+            f"No {display} API key found. Set it in the AI Reviewer settings "
+            f"(or add {name.upper()}_API_KEY to the add-on's .env file)."
+        )
+    model = config.get(name, {}).get("model", default_model)
+    headers, body = _openai_compat_request_parts(
+        key, model, system, messages, stream=True, extra_body=extra_body)
+    return _openai_compat_stream(url, headers, body, display, on_chunk)
 
 
 def _stream_nvidia(config, system, messages, on_chunk):
-    headers, body = _nvidia_request_parts(config, system, messages, stream=True)
-    return _openai_compat_stream(NVIDIA_URL, headers, body, "NVIDIA", on_chunk)
-
-
-CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
-
-
-def _cerebras_request_parts(config, system, messages, stream):
-    """Shared auth check + OpenAI-style request body for the Cerebras API."""
-    api_key = cerebras_api_key()
-    if not api_key:
-        raise RuntimeError(
-            "No Cerebras API key found. Set it in the AI Reviewer settings "
-            "(or add CEREBRAS_API_KEY to the add-on's .env file)."
-        )
-
-    model = config.get("cerebras", {}).get("model", "gpt-oss-120b")
-    return _openai_compat_request_parts(api_key, model, system, messages, stream)
-
-
-def _chat_cerebras(config, system, messages):
-    headers, body = _cerebras_request_parts(config, system, messages, stream=False)
-    return _openai_compat_chat(CEREBRAS_URL, headers, body, "Cerebras")
+    return _stream_openai_compat("nvidia", config, system, messages, on_chunk)
 
 
 def _stream_cerebras(config, system, messages, on_chunk):
-    headers, body = _cerebras_request_parts(config, system, messages, stream=True)
-    return _openai_compat_stream(CEREBRAS_URL, headers, body, "Cerebras", on_chunk)
-
-
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-
-
-def _openai_request_parts(config, system, messages, stream):
-    """Shared auth check + OpenAI-style request body for the OpenAI API."""
-    api_key = openai_api_key()
-    if not api_key:
-        raise RuntimeError(
-            "No OpenAI API key found. Set it in the AI Reviewer settings "
-            "(or add OPENAI_API_KEY to the add-on's .env file)."
-        )
-
-    model = config.get("openai", {}).get("model", "gpt-5.1")
-    return _openai_compat_request_parts(api_key, model, system, messages, stream)
-
-
-def _chat_openai(config, system, messages):
-    headers, body = _openai_request_parts(config, system, messages, stream=False)
-    return _openai_compat_chat(OPENAI_URL, headers, body, "OpenAI")
+    return _stream_openai_compat("cerebras", config, system, messages, on_chunk)
 
 
 def _stream_openai(config, system, messages, on_chunk):
-    headers, body = _openai_request_parts(config, system, messages, stream=True)
-    return _openai_compat_stream(OPENAI_URL, headers, body, "OpenAI", on_chunk)
-
-
-XAI_URL = "https://api.x.ai/v1/chat/completions"
-
-
-def _xai_request_parts(config, system, messages, stream):
-    """Shared auth check + OpenAI-style request body for the xAI (Grok) API."""
-    api_key = xai_api_key()
-    if not api_key:
-        raise RuntimeError(
-            "No xAI API key found. Set it in the AI Reviewer settings "
-            "(or add XAI_API_KEY to the add-on's .env file)."
-        )
-
-    model = config.get("xai", {}).get("model", "grok-4")
-    return _openai_compat_request_parts(api_key, model, system, messages, stream)
-
-
-def _chat_xai(config, system, messages):
-    headers, body = _xai_request_parts(config, system, messages, stream=False)
-    return _openai_compat_chat(XAI_URL, headers, body, "xAI")
+    return _stream_openai_compat("openai", config, system, messages, on_chunk)
 
 
 def _stream_xai(config, system, messages, on_chunk):
-    headers, body = _xai_request_parts(config, system, messages, stream=True)
-    return _openai_compat_stream(XAI_URL, headers, body, "xAI", on_chunk)
+    return _stream_openai_compat("xai", config, system, messages, on_chunk)
 
 
 # --- Anthropic (Claude) -------------------------------------------------------
@@ -758,8 +463,8 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
 def _anthropic_request_parts(config, system, messages, stream):
     """Shared auth check + Messages API request body for the Anthropic API."""
-    api_key = anthropic_api_key()
-    if not api_key:
+    key = api_key("anthropic")
+    if not key:
         raise RuntimeError(
             "No Anthropic API key found. Set it in the AI Reviewer settings "
             "(or add ANTHROPIC_API_KEY to the add-on's .env file)."
@@ -768,7 +473,7 @@ def _anthropic_request_parts(config, system, messages, stream):
     model = config.get("anthropic", {}).get("model", "claude-haiku-4-5")
     headers = {
         "Content-Type": "application/json",
-        "x-api-key": api_key,
+        "x-api-key": key,
         "anthropic-version": "2023-06-01",
     }
     body = {
@@ -780,31 +485,6 @@ def _anthropic_request_parts(config, system, messages, stream):
     if system:
         body["system"] = system
     return headers, body
-
-
-def _chat_anthropic(config, system, messages):
-    headers, body = _anthropic_request_parts(config, system, messages, stream=False)
-    try:
-        response = requests.post(ANTHROPIC_URL, headers=headers, json=body,
-                                 timeout=120)
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError(
-            "Could not reach the Anthropic API. Check your internet connection.")
-
-    if response.status_code != 200:
-        raise _openai_compat_error(response, "Anthropic")
-
-    data = response.json()
-    # Thinking-capable models may interleave other block types; keep the text.
-    text = "".join(
-        block.get("text", "")
-        for block in data.get("content", [])
-        if block.get("type") == "text"
-    )
-    if not text:
-        raise RuntimeError(
-            f"Anthropic returned no usable text. Response: {str(data)[:200]}")
-    return text
 
 
 def _stream_anthropic(config, system, messages, on_chunk):
@@ -820,19 +500,7 @@ def _stream_anthropic(config, system, messages, on_chunk):
         ) as response:
             if response.status_code != 200:
                 raise _openai_compat_error(response, "Anthropic")
-            for raw in response.iter_lines():
-                if not raw:
-                    continue
-                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                if not line.startswith("data:"):
-                    continue
-                payload = line[len("data:"):].strip()
-                if not payload:
-                    continue
-                try:
-                    obj = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
+            for obj in _sse_json(response):
                 kind = obj.get("type")
                 if kind == "content_block_delta":
                     delta_obj = obj.get("delta", {})
@@ -883,14 +551,8 @@ def _custom_request_parts(config, system, messages, stream):
         raise RuntimeError(
             "No Custom model set. Set the model name in the AI Reviewer settings."
         )
-    api_key = custom_api_key()
-    return _openai_compat_request_parts(api_key, model, system, messages, stream)
-
-
-def _chat_custom(config, system, messages):
-    url = _custom_url(config)
-    headers, body = _custom_request_parts(config, system, messages, stream=False)
-    return _openai_compat_chat(url, headers, body, "Custom")
+    key = api_key("custom")
+    return _openai_compat_request_parts(key, model, system, messages, stream)
 
 
 def _stream_custom(config, system, messages, on_chunk):

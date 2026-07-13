@@ -17,10 +17,9 @@ PROVIDER_LABELS = {
     "custom": "Custom (OpenAI-compatible)",
 }
 
-# Endpoint presets for the Local LLM provider. The config dialog shows these in
-# an editable combo box; any server exposing Ollama's /api/chat protocol works.
+# Default endpoint for the Local LLM provider; any server exposing Ollama's
+# /api/chat protocol works.
 OLLAMA_DEFAULT_ENDPOINT = "http://localhost:11434"
-LOCAL_ENDPOINT_PRESETS = [OLLAMA_DEFAULT_ENDPOINT]
 
 MODEL_OPTIONS = {
     "ollama": ["gemma4", "gpt-oss:20b", "gpt-oss:120b"],

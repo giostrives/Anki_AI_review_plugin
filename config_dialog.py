@@ -155,15 +155,7 @@ class ConfigDialog(QDialog):
         form = QFormLayout()
         endpoint = (ollama_cfg.get("endpoint")
                     or self.config.get("ollama_endpoint", provider_models.OLLAMA_DEFAULT_ENDPOINT))
-        # Editable combo of known local server URLs; the saved value is added if
-        # it isn't a preset. Item text is the bare URL: picking it sets the field
-        # verbatim.
-        self.endpoint_input = QComboBox()
-        self.endpoint_input.setEditable(True)
-        self.endpoint_input.addItems(provider_models.LOCAL_ENDPOINT_PRESETS)
-        if self.endpoint_input.findText(endpoint) < 0:
-            self.endpoint_input.addItem(endpoint)
-        self.endpoint_input.setCurrentText(endpoint)
+        self.endpoint_input = QLineEdit(endpoint)
         form.addRow("Server URL:", self.endpoint_input)
         self.model_inputs["ollama"] = self._make_model_combo(
             "ollama", ollama_cfg.get("model") or self.config.get("model", "gemma4"))
@@ -191,7 +183,7 @@ class ConfigDialog(QDialog):
             name, cfg.get("model", _CLOUD_DEFAULT_MODELS[name]))
         form.addRow("Model:", self.model_inputs[name])
 
-        key_input = QLineEdit(getattr(providers, f"{name}_api_key")())
+        key_input = QLineEdit(providers.api_key(name))
         key_input.setEchoMode(QLineEdit.EchoMode.Password)
         key_input.setPlaceholderText(f"Paste your {label} API key")
         self.key_inputs[name] = key_input
@@ -221,7 +213,7 @@ class ConfigDialog(QDialog):
         self.custom_model_input.setPlaceholderText("Insert model name")
         form.addRow("Model:", self.custom_model_input)
 
-        key_input = QLineEdit(providers.custom_api_key())
+        key_input = QLineEdit(providers.api_key("custom"))
         key_input.setEchoMode(QLineEdit.EchoMode.Password)
         key_input.setPlaceholderText("Paste your API key (optional)")
         self.key_inputs["custom"] = key_input
@@ -444,7 +436,7 @@ class ConfigDialog(QDialog):
 
     def _delete_key(self, name):
         """Clear a provider's stored API key from .env and its input field."""
-        getattr(providers, f"delete_{name}_api_key")()
+        providers.delete_api_key(name)
         self.key_inputs[name].setText("")
         tooltip(f"{provider_models.PROVIDER_LABELS[name]} API key deleted")
 
@@ -504,7 +496,7 @@ class ConfigDialog(QDialog):
             [p for p in _PROVIDERS if p != primary]
             if self.fallback_select.currentIndex() == 1 else [])
         self.config["ollama"] = {
-            "endpoint": self.endpoint_input.currentText().strip(),
+            "endpoint": self.endpoint_input.text().strip(),
             "model": self._model_text("ollama", "gemma4"),
         }
         # Cloud key-based providers: model goes in the config, the API key in
@@ -513,13 +505,12 @@ class ConfigDialog(QDialog):
         for name in _CLOUD_DEFAULT_MODELS:
             self.config[name] = {
                 "model": self._model_text(name, _CLOUD_DEFAULT_MODELS[name])}
-            getattr(providers, f"set_{name}_api_key")(
-                self.key_inputs[name].text().strip())
+            providers.set_api_key(name, self.key_inputs[name].text().strip())
         self.config["custom"] = {
             "endpoint": self.custom_endpoint_input.text().strip(),
             "model": self.custom_model_input.text().strip(),
         }
-        providers.set_custom_api_key(self.key_inputs["custom"].text().strip())
+        providers.set_api_key("custom", self.key_inputs["custom"].text().strip())
         self.config["logging_enabled"] = self.logging_enabled.currentIndex() == 1
         self.config["conversations_dir"] = self.log_dir_input.text().strip()
         # Drop the obsolete flat keys if present.
